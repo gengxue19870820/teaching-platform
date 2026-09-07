@@ -11,7 +11,10 @@
 
       <div class="form-group">
         <label>GitHub Token</label>
-        <input v-model="formToken" type="password" placeholder="ghp_xxxxxxxxxxxx" />
+        <div class="input-with-toggle">
+          <input v-model="formToken" :type="showToken ? 'text' : 'password'" placeholder="ghp_xxxxxxxxxxxx" />
+          <span class="toggle-eye" @click="showToken = !showToken" :title="showToken ? '隐藏' : '显示'">{{ showToken ? '🙈' : '👁️' }}</span>
+        </div>
       </div>
       <div class="form-group">
         <label>Gist ID <span class="hint">（首次上传后自动填写，也可手动填入已有 Gist ID）</span></label>
@@ -100,6 +103,7 @@ const { token, gistId, publicGistId, loading, lastSyncTime, message, push, pull,
 const formToken = ref('')
 const formGistId = ref('')
 const publishPwd = ref(localStorage.getItem('github_sync_publish_pwd') || '')
+const showToken = ref(false)
 
 onMounted(() => {
   formToken.value = token.value
@@ -153,6 +157,10 @@ async function doPublish() {
 .form-group label { display: block; font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; }
 .form-group input { width: 100%; height: 38px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 12px; font-size: 14px; }
 .form-group input:focus { outline: none; border-color: var(--primary); }
+.input-with-toggle { position: relative; display: flex; align-items: center; }
+.input-with-toggle input { padding-right: 40px; }
+.toggle-eye { position: absolute; right: 10px; cursor: pointer; font-size: 18px; user-select: none; opacity: 0.6; transition: opacity .15s; }
+.toggle-eye:hover { opacity: 1; }
 .hint { font-size: 12px; color: var(--text-light); font-weight: 400; }
 
 .btn-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
