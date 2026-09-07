@@ -55,16 +55,20 @@
     </div>
 
     <div class="sync-card">
-      <h3>👨‍🎓 学生端数据发布</h3>
-      <p class="desc">将学生名单、作业、考勤数据发布到公开 Gist，让学生端（任何设备）可以读取。每次修改数据后需重新发布。</p>
+      <h3>👨‍🎓 学生端数据发布（加密）</h3>
+      <p class="desc">将学生名单、作业、考勤数据加密后发布到云端。学生需输入密码才能读取数据，确保信息安全。</p>
+      <div class="form-group">
+        <label>发布密码 <span class="hint">（学生登录时需输入此密码，请牢记！）</span></label>
+        <input v-model="publishPwd" type="text" placeholder="设置一个密码，告诉学生" />
+      </div>
       <div class="btn-row">
         <button class="btn btn-upload" @click="doPublish" :disabled="loading">
-          {{ loading ? '发布中…' : '📢 发布学生数据' }}
+          {{ loading ? '发布中…' : '📢 加密发布学生数据' }}
         </button>
       </div>
       <div v-if="publicGistId" class="sync-info">
         公开 Gist ID：<code>{{ publicGistId }}</code>
-        <br><span class="hint">学生端会自动使用此 ID 读取数据</span>
+        <br><span class="hint">学生端会自动使用此 ID 读取加密数据</span>
       </div>
     </div>
 
@@ -95,6 +99,7 @@ const { token, gistId, publicGistId, loading, lastSyncTime, message, push, pull,
 
 const formToken = ref('')
 const formGistId = ref('')
+const publishPwd = ref(localStorage.getItem('github_sync_publish_pwd') || '')
 
 onMounted(() => {
   formToken.value = token.value
@@ -128,7 +133,8 @@ async function doImport(e) {
   await importLocal(file)
 }
 async function doPublish() {
-  await publishStudentData()
+  localStorage.setItem('github_sync_publish_pwd', publishPwd.value)
+  await publishStudentData(publishPwd.value)
 }
 </script>
 

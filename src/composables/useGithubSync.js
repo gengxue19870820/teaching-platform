@@ -9,15 +9,18 @@ const SYNC_KEYS = [
 const TOKEN_KEY = 'github_sync_token'
 const GIST_KEY = 'github_sync_gist_id'
 const PUBLIC_GIST_KEY = 'github_sync_public_gist_id'
+const PWD_KEY = 'github_sync_publish_pwd'
 const FILE_NAME = 'teaching_platform_data.json'
 const PUBLIC_FILE_NAME = 'student_data.json'
 
 function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
 function getGistId() { return localStorage.getItem(GIST_KEY) || '' }
 function getPublicGistId() { return localStorage.getItem(PUBLIC_GIST_KEY) || '' }
+function getPublishPwd() { return localStorage.getItem(PWD_KEY) || '' }
 function setToken(v) { localStorage.setItem(TOKEN_KEY, v) }
 function setGistId(v) { localStorage.setItem(GIST_KEY, v) }
 function setPublicGistId(v) { localStorage.setItem(PUBLIC_GIST_KEY, v) }
+function setPublishPwd(v) { localStorage.setItem(PWD_KEY, v) }
 
 /* 收集所有需要同步的数据 */
 function collectData() {
@@ -89,6 +92,39 @@ async function readGist(token, gistId) {
   const file = gist.files[FILE_NAME]
   if (!file) throw new Error('Gist 中未找到同步文件')
   return JSON.parse(file.content)
+}
+
+/* ---- AES 加密/解密 (Web Crypto API) ---- */
+function buf2b64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))) }
+function b642buf(b64) { return Uint8Array.from(atob(b64), c => c.charCodeAt(0)) }
+
+async function deriveKey(password, salt) {
+  const enc = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey'])
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  )
+}
+
+async function encryptData(data, password) {
+  const enc = new TextEncoder()
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const key = await deriveKey(password, salt)
+  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(JSON.stringify(data)))
+  return { salt: buf2b64(salt), iv: buf2b64(iv), data: buf2b64(encrypted), encrypted: true }
+}
+
+async function decryptData(payload, password) {
+  const salt = b642buf(payload.salt)
+  const iv = b642buf(payload.iv)
+  const key = await deriveKey(password, salt)
+  const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, b642buf(payload.data))
+  return JSON.parse(new TextDecoder().decode(decrypted))
 }
 
 /* 提取学生名单数据（供学生端使用） */
@@ -190,13 +226,15 @@ export function useGithubSync() {
     }
   }
 
-  /* 发布学生数据到公开 Gist（供学生端读取） */
-  async function publishStudentData() {
+  /* 发布学生数据到公开 Gist（加密后存储） */
+  async function publishStudentData(password) {
     if (!token.value) { message.value = '请先配置 GitHub Token'; return false }
+    if (!password) { message.value = '请设置发布密码，用于加密学生数据'; return false }
     loading.value = true
     message.value = ''
     try {
-      const data = extractStudentData()
+      const rawData = extractStudentData()
+      const data = await encryptData(rawData, password)
       let gist
       if (publicGistId.value) {
         gist = await apiRequest('https://api.github.com/gists/' + publicGistId.value, 'PATCH', {
@@ -211,8 +249,8 @@ export function useGithubSync() {
         publicGistId.value = gist.id
         setPublicGistId(gist.id)
       }
-      const studentCount = data.students.length
-      message.value = '✅ 发布成功！' + studentCount + ' 名学生数据已发布，Gist ID: ' + gist.id
+      const studentCount = rawData.students.length
+      message.value = '✅ 发布成功！' + studentCount + ' 名学生数据已加密发布，Gist ID: ' + gist.id
       return gist.id
     } catch (e) {
       message.value = '❌ 发布失败：' + e.message
