@@ -8,12 +8,16 @@ const SYNC_KEYS = [
 
 const TOKEN_KEY = 'github_sync_token'
 const GIST_KEY = 'github_sync_gist_id'
+const PUBLIC_GIST_KEY = 'github_sync_public_gist_id'
 const FILE_NAME = 'teaching_platform_data.json'
+const PUBLIC_FILE_NAME = 'student_data.json'
 
 function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
 function getGistId() { return localStorage.getItem(GIST_KEY) || '' }
+function getPublicGistId() { return localStorage.getItem(PUBLIC_GIST_KEY) || '' }
 function setToken(v) { localStorage.setItem(TOKEN_KEY, v) }
 function setGistId(v) { localStorage.setItem(GIST_KEY, v) }
+function setPublicGistId(v) { localStorage.setItem(PUBLIC_GIST_KEY, v) }
 
 /* 收集所有需要同步的数据 */
 function collectData() {
@@ -87,9 +91,55 @@ async function readGist(token, gistId) {
   return JSON.parse(file.content)
 }
 
+/* 提取学生名单数据（供学生端使用） */
+function extractStudentData() {
+  const mgmt = JSON.parse(localStorage.getItem('teaching_mgmt_v3') || '{}')
+  const students = []
+  if (mgmt.classes) {
+    Object.values(mgmt.classes).forEach(c => {
+      if (c.data && c.data.students) {
+        c.data.students.forEach(s => {
+          students.push({
+            studentId: s.studentId || s.id,
+            name: s.name,
+            className: c.info ? c.info.name : '',
+            grade: c.info ? c.info.grade : '',
+            classNo: c.info ? c.info.classNo : ''
+          })
+        })
+      }
+    })
+  }
+  const hwStudents = JSON.parse(localStorage.getItem('hw_students') || '[]')
+  hwStudents.forEach(s => {
+    if (!students.find(x => x.studentId === s.id && x.name === s.name)) {
+      students.push({ studentId: s.id, name: s.name, className: (s.grade || '') + (s.class || '') })
+    }
+  })
+  const attRoster = JSON.parse(localStorage.getItem('att_roster') || '[]')
+  attRoster.forEach(r => {
+    if (!students.find(x => x.studentId === r.studentId && x.name === r.studentName)) {
+      students.push({ studentId: r.studentId, name: r.studentName, className: r.className || '' })
+    }
+  })
+  const hwHomework = JSON.parse(localStorage.getItem('hw_homework') || '[]')
+  const hwSubmissions = JSON.parse(localStorage.getItem('hw_submissions') || '[]')
+  const attRecords = JSON.parse(localStorage.getItem('att_records') || '[]')
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    updatedAtStr: new Date().toLocaleString('zh-CN'),
+    students,
+    homework: hwHomework,
+    submissions: hwSubmissions,
+    attRecords
+  }
+}
+
 export function useGithubSync() {
   const token = ref(getToken())
   const gistId = ref(getGistId())
+  const publicGistId = ref(getPublicGistId())
   const loading = ref(false)
   const lastSyncTime = ref('')
   const message = ref('')
@@ -140,6 +190,38 @@ export function useGithubSync() {
     }
   }
 
+  /* 发布学生数据到公开 Gist（供学生端读取） */
+  async function publishStudentData() {
+    if (!token.value) { message.value = '请先配置 GitHub Token'; return false }
+    loading.value = true
+    message.value = ''
+    try {
+      const data = extractStudentData()
+      let gist
+      if (publicGistId.value) {
+        gist = await apiRequest('https://api.github.com/gists/' + publicGistId.value, 'PATCH', {
+          files: { [PUBLIC_FILE_NAME]: { content: JSON.stringify(data) } }
+        }, token.value)
+      } else {
+        gist = await apiRequest('https://api.github.com/gists', 'POST', {
+          description: '教学管理平台-学生数据（公开，供学生端读取）',
+          public: true,
+          files: { [PUBLIC_FILE_NAME]: { content: JSON.stringify(data) } }
+        }, token.value)
+        publicGistId.value = gist.id
+        setPublicGistId(gist.id)
+      }
+      const studentCount = data.students.length
+      message.value = '✅ 发布成功！' + studentCount + ' 名学生数据已发布，Gist ID: ' + gist.id
+      return gist.id
+    } catch (e) {
+      message.value = '❌ 发布失败：' + e.message
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
   /* 保存配置 */
   function saveConfig(t, g) {
     token.value = t
@@ -153,8 +235,10 @@ export function useGithubSync() {
   function clearConfig() {
     token.value = ''
     gistId.value = ''
+    publicGistId.value = ''
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(GIST_KEY)
+    localStorage.removeItem(PUBLIC_GIST_KEY)
     lastSyncTime.value = ''
     message.value = '配置已清除'
   }
@@ -195,8 +279,8 @@ export function useGithubSync() {
   }
 
   return {
-    token, gistId, loading, lastSyncTime, message,
-    push, pull, saveConfig, clearConfig,
+    token, gistId, publicGistId, loading, lastSyncTime, message,
+    push, pull, publishStudentData, saveConfig, clearConfig,
     exportLocal, importLocal
   }
 }

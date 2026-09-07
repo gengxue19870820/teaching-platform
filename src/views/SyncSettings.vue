@@ -54,6 +54,20 @@
       </div>
     </div>
 
+    <div class="sync-card">
+      <h3>👨‍🎓 学生端数据发布</h3>
+      <p class="desc">将学生名单、作业、考勤数据发布到公开 Gist，让学生端（任何设备）可以读取。每次修改数据后需重新发布。</p>
+      <div class="btn-row">
+        <button class="btn btn-upload" @click="doPublish" :disabled="loading">
+          {{ loading ? '发布中…' : '📢 发布学生数据' }}
+        </button>
+      </div>
+      <div v-if="publicGistId" class="sync-info">
+        公开 Gist ID：<code>{{ publicGistId }}</code>
+        <br><span class="hint">学生端会自动使用此 ID 读取数据</span>
+      </div>
+    </div>
+
     <div v-if="message" class="msg-box" :class="message.startsWith('✅') ? 'msg-ok' : 'msg-err'">
       {{ message }}
     </div>
@@ -77,7 +91,7 @@
 import { ref, onMounted } from 'vue'
 import { useGithubSync } from '../composables/useGithubSync.js'
 
-const { token, gistId, loading, lastSyncTime, message, push, pull, saveConfig, clearConfig, exportLocal, importLocal } = useGithubSync()
+const { token, gistId, publicGistId, loading, lastSyncTime, message, push, pull, publishStudentData, saveConfig, clearConfig, exportLocal, importLocal } = useGithubSync()
 
 const formToken = ref('')
 const formGistId = ref('')
@@ -112,6 +126,9 @@ async function doImport(e) {
   const file = e.target.files[0]
   if (!file) return
   await importLocal(file)
+}
+async function doPublish() {
+  await publishStudentData()
 }
 </script>
 

@@ -145,6 +145,8 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <div v-if="loginErr" class="error-msg">{{ loginErr }}</div>
       <button class="btn-login" @click="doLogin">登 录</button>
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
+      <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
+      <p v-if="!cloudLoading && !cloudData && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
     </div>
   </div>
 
@@ -302,6 +304,11 @@ if (typeof Vue === 'undefined') {
 const { createApp, ref, reactive, computed, onMounted } = Vue
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
+/* ===== 云端数据配置 ===== */
+/* 教师在「数据同步」页面点击「发布学生数据」后，将生成的 Gist ID 填入下方 */
+const CLOUD_GIST_ID = '' // 例如: 'abc123def456'
+/* ======================== */
+
 createApp({
   setup() {
     const loginId = ref('')
@@ -309,8 +316,35 @@ createApp({
     const loginErr = ref('')
     const user = ref(null)
     const tab = ref('homework')
+    const cloudData = ref(null) // 云端数据
+    const cloudLoading = ref(false)
+
+    /* 从公开 Gist 获取云端数据 */
+    async function fetchCloudData() {
+      const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
+      if (!gid) return null
+      try {
+        const resp = await fetch('https://api.github.com/gists/' + gid)
+        if (!resp.ok) return null
+        const gist = await resp.json()
+        const file = gist.files['student_data.json']
+        if (!file) return null
+        const data = JSON.parse(file.content)
+        cloudData.value = data
+        localStorage.setItem('stu_cloud_gist_id', gid)
+        return data
+      } catch (e) {
+        console.warn('云端数据获取失败:', e)
+        return null
+      }
+    }
 
     function getAllStudents() {
+      // 优先使用云端数据
+      if (cloudData.value && cloudData.value.students) {
+        return cloudData.value.students
+      }
+      // 回退到本地 localStorage
       const mgmt = JSON.parse(localStorage.getItem('teaching_mgmt_v3') || '{}')
       const sts = []
       if (mgmt.classes) {
@@ -353,8 +387,24 @@ createApp({
     function doLogout() { user.value = null; localStorage.removeItem('stu_login') }
 
     // ---- 作业 ----
-    function getHomework() { return JSON.parse(localStorage.getItem('hw_homework') || '[]') }
-    function getSubmissions() { return JSON.parse(localStorage.getItem('hw_submissions') || '[]') }
+    function getHomework() {
+      if (cloudData.value && cloudData.value.homework) return cloudData.value.homework
+      return JSON.parse(localStorage.getItem('hw_homework') || '[]')
+    }
+    function getSubmissions() {
+      if (cloudData.value && cloudData.value.submissions) {
+        // 合并云端和本地提交记录
+        const local = JSON.parse(localStorage.getItem('hw_submissions') || '[]')
+        const cloud = cloudData.value.submissions
+        const merged = [...cloud]
+        local.forEach(ls => {
+          const idx = merged.findIndex(cs => cs.studentId === ls.studentId && cs.homeworkId === ls.homeworkId)
+          if (idx >= 0) merged[idx] = ls; else merged.push(ls)
+        })
+        return merged
+      }
+      return JSON.parse(localStorage.getItem('hw_submissions') || '[]')
+    }
     const homeworkList = computed(() => getHomework().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)))
 
     function getSub(hwId) {
@@ -468,7 +518,13 @@ createApp({
     const hostOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
-    function loadAttRoster() { attRoster.value = JSON.parse(localStorage.getItem('att_roster') || '[]') }
+    function loadAttRoster() {
+      if (cloudData.value && cloudData.value.attRecords) {
+        attRoster.value = cloudData.value.students ? cloudData.value.students.map(s => ({ studentId: s.studentId, studentName: s.name, className: s.className })) : []
+      } else {
+        attRoster.value = JSON.parse(localStorage.getItem('att_roster') || '[]')
+      }
+    }
 
     // 检查当前学生是否已提交过考勤（以学号为关键，每次上课只能提交1次）
     const attAlreadySubmitted = computed(() => {
@@ -518,14 +574,18 @@ createApp({
     }
     function lvlText(l) { return { A: '优秀', B: '良好', C: '合格', D: '不合格' }[l] || '' }
 
-    onMounted(() => {
+    onMounted(async () => {
       const saved = localStorage.getItem('stu_login')
       if (saved) { try { user.value = JSON.parse(saved) } catch { localStorage.removeItem('stu_login') } }
+      cloudLoading.value = true
+      await fetchCloudData()
+      cloudLoading.value = false
       loadAttRoster()
     })
 
     return {
       loginId, loginName, loginErr, user, tab, doLogin, doLogout,
+      cloudData, cloudLoading, CLOUD_GIST_ID,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
