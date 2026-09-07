@@ -72,7 +72,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useWorkbench } from '../composables/useWorkbench.js'
+
+const { state, curInfo, curStudents: getWbStudents } = useWorkbench()
 
 const loginGrade = ref('')
 const loginClass = ref('')
@@ -80,27 +83,45 @@ const loginStudent = ref('')
 const loginError = ref('')
 const currentUser = ref(null)
 
-function getStudents() { return JSON.parse(localStorage.getItem('hw_students') || '[]') }
 function getHomework() { return JSON.parse(localStorage.getItem('hw_homework') || '[]') }
 function getSubmissions() { return JSON.parse(localStorage.getItem('hw_submissions') || '[]') }
 
-const grades = computed(() => [...new Set(getStudents().map(s => s.grade).filter(Boolean))])
+const grades = computed(() => {
+  const wbGrades = [...new Set(Object.values(state.classes).map(c => c.info.grade).filter(Boolean))]
+  return wbGrades.length > 0 ? wbGrades : [...new Set(getStudentsFromStorage().map(s => s.grade).filter(Boolean))]
+})
 const classes = computed(() => {
   if (!loginGrade.value) return []
-  return [...new Set(getStudents().filter(s => s.grade === loginGrade.value).map(s => s.class).filter(Boolean))]
+  const wbClasses = [...new Set(Object.values(state.classes).filter(c => c.info.grade === loginGrade.value).map(c => c.info.classNo).filter(Boolean))]
+  if (wbClasses.length > 0) return wbClasses
+  return [...new Set(getStudentsFromStorage().filter(s => s.grade === loginGrade.value).map(s => s.class).filter(Boolean))]
 })
 const classStudents = computed(() => {
   if (!loginGrade.value || !loginClass.value) return []
-  return getStudents().filter(s => s.grade === loginGrade.value && s.class === loginClass.value)
+  const wbClassId = 'c_' + loginGrade.value + '_' + loginClass.value
+  const wbClass = state.classes[wbClassId]
+  if (wbClass && wbClass.data.students.length > 0) {
+    return wbClass.data.students.map(s => ({ id: s.studentId || s.id, name: s.name, grade: loginGrade.value, class: loginClass.value }))
+  }
+  return getStudentsFromStorage().filter(s => s.grade === loginGrade.value && s.class === loginClass.value)
 })
 
+function getStudentsFromStorage() { return JSON.parse(localStorage.getItem('hw_students') || '[]') }
+
 function login() {
-  const students = getStudents()
-  const s = students.find(st => st.id === loginStudent.value)
+  const s = classStudents.value.find(st => st.id === loginStudent.value)
   if (!s) { loginError.value = '请选择学生'; return }
-  currentUser.value = s
+  currentUser.value = { ...s, grade: loginGrade.value, class: loginClass.value }
   loginError.value = ''
 }
+
+onMounted(() => {
+  const info = curInfo()
+  if (info) {
+    loginGrade.value = info.grade || ''
+    loginClass.value = info.classNo || ''
+  }
+})
 
 const myHomeworkList = computed(() => {
   return getHomework().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))

@@ -1,221 +1,298 @@
 <template>
-  <div class="app">
-    <header class="header">
+  <div>
+    <div class="hc-header">
       <h1>📋 作业提交情况统计</h1>
-      <p class="subtitle">上传学生名单和作业文件，自动检查提交情况</p>
-    </header>
-    <main class="main">
-      <section class="card">
-        <h2>① 输入学生名单</h2>
-        <p class="hint">每行一个学号，或用逗号/空格分隔</p>
-        <textarea v-model="studentInput" placeholder="例如：&#10;2024001&#10;2024002&#10;2024003" class="student-input" rows="6"></textarea>
-        <div class="student-count" v-if="studentList.length > 0">已识别 <strong>{{ studentList.length }}</strong> 名学生</div>
-      </section>
-      <section class="card">
-        <h2>② 上传作业文件</h2>
-        <p class="hint">文件名中包含学号即可识别（如 2024001-1.pdf、2024001作业.docx 等）</p>
-        <div class="upload-area" :class="{ dragging: isDragging }" @dragover.prevent="isDragging = true" @dragleave="isDragging = false" @drop.prevent="handleDrop" @click="triggerFileInput">
-          <div class="upload-icon">📁</div>
-          <p>点击选择文件或拖拽文件到此处</p>
-          <input type="file" ref="fileInput" multiple @change="handleFileSelect" style="display: none" />
+      <p class="hc-subtitle">检查当前班级（{{ curInfo()?.name || '—' }}）的作业提交情况，并同步积分到学生信息</p>
+    </div>
+
+    <!-- 选择作业 -->
+    <div class="hc-card">
+      <h2>选择作业</h2>
+      <div v-if="homeworkList.length === 0" class="hc-empty">
+        <p>暂无已发布的作业，请先在「作业提交(教师)」中发布作业</p>
+      </div>
+      <div v-else class="hw-select-grid">
+        <div v-for="hw in homeworkList" :key="hw.id" class="hw-select-item"
+             :class="{ active: selectedHwId === hw.id, synced: isHwSynced(hw.id) }" @click="selectHomework(hw.id)">
+          <div class="hw-select-title">{{ hw.title }} <span v-if="isHwSynced(hw.id)" class="synced-badge">已同步</span></div>
+          <div class="hw-select-meta">{{ getSubmissions(hw.id).length }}/{{ curStudents().length }} 人提交</div>
+          <div class="hw-select-date">{{ formatDate(hw.createdAt) }}</div>
         </div>
-        <div class="file-count" v-if="uploadedFiles.length > 0">
-          已上传 <strong>{{ uploadedFiles.length }}</strong> 个文件
-          <button class="btn-clear" @click="clearFiles">清空文件</button>
+      </div>
+    </div>
+
+    <!-- 检查结果 -->
+    <div v-if="selectedHwId" class="hc-card">
+      <div class="hc-result-header">
+        <h2>{{ selectedHw.title }} - 提交检查结果</h2>
+        <div class="hc-actions">
+          <button class="hw-btn hw-btn-green" @click="applyAllScores" :disabled="isSynced">
+            {{ isSynced ? '✅ 已同步积分（不可重复）' : '⚡ 一键同步积分到学生信息' }}
+          </button>
+          <button class="hw-btn hw-btn-blue" @click="exportReport">📊 导出报告</button>
         </div>
-      </section>
-      <section class="card" v-if="uploadedFiles.length > 0 && studentList.length > 0">
-        <h2>③ 检查结果</h2>
-        <div class="stats">
-          <div class="stat-item submitted"><span class="stat-number">{{ submittedStudents.length }}</span><span class="stat-label">已交</span></div>
-          <div class="stat-item not-submitted"><span class="stat-number">{{ notSubmittedStudents.length }}</span><span class="stat-label">未交</span></div>
-          <div class="stat-item total"><span class="stat-number">{{ studentList.length }}</span><span class="stat-label">总人数</span></div>
+      </div>
+
+      <!-- 统计卡片 -->
+      <div class="hc-stats-row">
+        <div class="hc-stat hc-stat-total">
+          <span class="hc-stat-num">{{ curStudents().length }}</span>
+          <span class="hc-stat-label">总人数</span>
         </div>
-        <div class="tabs">
-          <button class="tab" :class="{ active: activeTab === 'submitted' }" @click="activeTab = 'submitted'">✅ 已交作业 ({{ submittedStudents.length }})</button>
-          <button class="tab" :class="{ active: activeTab === 'not-submitted' }" @click="activeTab = 'not-submitted'">❌ 未交作业 ({{ notSubmittedStudents.length }})</button>
-          <button class="tab" :class="{ active: activeTab === 'all' }" @click="activeTab = 'all'">📄 全部文件 ({{ uploadedFiles.length }})</button>
+        <div class="hc-stat hc-stat-submitted">
+          <span class="hc-stat-num">{{ submittedStudents.length }}</span>
+          <span class="hc-stat-label">✅ 已提交（+2分）</span>
         </div>
-        <div v-if="activeTab === 'submitted'" class="result-list">
-          <div v-if="submittedStudents.length === 0" class="empty">暂无数据</div>
-          <div v-for="student in submittedStudents" :key="student.id" class="result-item success">
-            <span class="student-id">{{ student.id }}</span>
-            <span class="file-list"><span v-for="file in student.files" :key="file" class="file-tag">{{ file }}</span></span>
-          </div>
+        <div class="hc-stat hc-stat-not">
+          <span class="hc-stat-num">{{ notSubmittedStudents.length }}</span>
+          <span class="hc-stat-label">❌ 未提交（-1分）</span>
         </div>
-        <div v-if="activeTab === 'not-submitted'" class="result-list">
-          <div v-if="notSubmittedStudents.length === 0" class="empty">🎉 全部已交！</div>
-          <div v-for="student in notSubmittedStudents" :key="student" class="result-item danger">
-            <span class="student-id">{{ student }}</span>
-          </div>
+      </div>
+
+      <!-- 积分同步说明 -->
+      <div class="hc-score-info" v-if="!isSynced">
+        <span>📌 点击「同步积分」将为已提交学生添加 <strong>+2分</strong>（主动探究），未提交学生添加 <strong>-1分</strong>（未提交作业），结果将同步到「学生信息」的行为记录中。<strong>每个作业仅可同步一次，不可重复操作。</strong></span>
+      </div>
+      <div class="hc-score-info hc-score-done" v-else>
+        <span>✅ 积分已同步！已提交 +2分（{{ submittedStudents.length }}人），未提交 -1分（{{ notSubmittedStudents.length }}人），可在「学生信息」和「课堂行为」中查看。</span>
+      </div>
+
+      <!-- 标签切换 -->
+      <div class="hc-tabs">
+        <button class="hc-tab" :class="{ active: activeTab === 'all' }" @click="activeTab='all'">📄 全部（{{ curStudents().length }}）</button>
+        <button class="hc-tab" :class="{ active: activeTab === 'submitted' }" @click="activeTab='submitted'">✅ 已提交（{{ submittedStudents.length }}）</button>
+        <button class="hc-tab" :class="{ active: activeTab === 'not' }" @click="activeTab='not'">❌ 未提交（{{ notSubmittedStudents.length }}）</button>
+      </div>
+
+      <!-- 全部学生列表 -->
+      <div v-if="activeTab === 'all'" class="hc-list">
+        <div v-for="s in allStudentsStatus" :key="s.id" class="hc-list-item" :class="s.submitted ? 'hc-ok' : 'hc-fail'">
+          <span class="hc-sid">{{ s.studentId || s.id }}</span>
+          <span class="hc-name">{{ s.name }}</span>
+          <span class="hc-status-icon">{{ s.submitted ? '✅' : '❌' }}</span>
+          <span class="hc-status-text">{{ s.submitted ? '已提交' : '未提交' }}</span>
+          <span class="hc-time" v-if="s.submitted">{{ formatTime(s.submittedAt) }}</span>
+          <span class="hc-score-tag" :class="s.submitted ? 'score-pos' : 'score-neg'">{{ s.submitted ? '+2' : '-1' }}</span>
         </div>
-        <div v-if="activeTab === 'all'" class="result-list">
-          <div v-for="file in uploadedFiles" :key="file.name" class="result-item file-item">
-            <span class="file-name">{{ file.name }}</span>
-            <span class="file-student" v-if="extractStudentId(file.name)">学号: {{ extractStudentId(file.name) }}</span>
-            <span class="file-student unmatched" v-else>未匹配学号</span>
-          </div>
+      </div>
+
+      <!-- 已提交列表 -->
+      <div v-if="activeTab === 'submitted'" class="hc-list">
+        <div v-if="submittedStudents.length === 0" class="hc-empty-inline">暂无提交记录</div>
+        <div v-for="s in submittedStudents" :key="s.id" class="hc-list-item hc-ok">
+          <span class="hc-sid">{{ s.studentId || s.id }}</span>
+          <span class="hc-name">{{ s.name }}</span>
+          <span class="hc-status-icon">✅</span>
+          <span class="hc-status-text">已提交</span>
+          <span class="hc-time">{{ formatTime(s.submittedAt) }}</span>
+          <span class="hc-score-tag score-pos">+2</span>
         </div>
-        <div class="export-area">
-          <button class="btn-export" @click="exportNotSubmitted">📋 复制未交名单</button>
-          <button class="btn-export" @click="exportTxt">📄 导出 TXT 报告</button>
-          <button class="btn-export btn-export-xls" @click="exportXls">📊 导出 XLS 表格</button>
+      </div>
+
+      <!-- 未提交列表 -->
+      <div v-if="activeTab === 'not'" class="hc-list">
+        <div v-if="notSubmittedStudents.length === 0" class="hc-empty-inline">🎉 全部已提交！</div>
+        <div v-for="s in notSubmittedStudents" :key="s.id" class="hc-list-item hc-fail">
+          <span class="hc-sid">{{ s.studentId || s.id }}</span>
+          <span class="hc-name">{{ s.name }}</span>
+          <span class="hc-status-icon">❌</span>
+          <span class="hc-status-text">未提交</span>
+          <span class="hc-score-tag score-neg">-1</span>
         </div>
-      </section>
-    </main>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed } from 'vue'
 import * as XLSX from 'xlsx'
+import { useWorkbench } from '../composables/useWorkbench.js'
 
-const studentInput = ref('')
-const uploadedFiles = ref([])
-const isDragging = ref(false)
-const activeTab = ref('submitted')
-const fileInput = ref(null)
+const { curInfo, curStudents, addBehavior } = useWorkbench()
 
-const studentList = computed(() => {
-  if (!studentInput.value.trim()) return []
-  return studentInput.value.split(/[\n,，;；\s]+/).map(s => s.trim()).filter(s => s.length > 0)
-})
+function getHomework() { return JSON.parse(localStorage.getItem('hw_homework') || '[]') }
+function getSubmissions() { return JSON.parse(localStorage.getItem('hw_submissions') || '[]') }
 
-function extractStudentId(filename) {
-  const nameWithoutExt = filename.replace(/\.[^.]+$/, '')
-  for (const id of studentList.value) {
-    if (nameWithoutExt.includes(id)) return id
-  }
-  return null
+const homeworkList = computed(() => getHomework().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)))
+
+const selectedHwId = ref(null)
+const selectedHw = computed(() => homeworkList.value.find(h => h.id === selectedHwId.value))
+const activeTab = ref('all')
+
+// 持久化同步状态（localStorage + 响应式触发）
+const syncVersion = ref(0)
+function getSyncedIds() { return JSON.parse(localStorage.getItem('hw_scores_synced') || '[]') }
+function addSyncedId(id) { const arr = getSyncedIds(); if (!arr.includes(id)) { arr.push(id); localStorage.setItem('hw_scores_synced', JSON.stringify(arr)); syncVersion.value++ } }
+
+const isSynced = computed(() => { syncVersion.value; return selectedHwId.value ? getSyncedIds().includes(selectedHwId.value) : false })
+
+function isHwSynced(id) { return getSyncedIds().includes(id) }
+
+function selectHomework(id) {
+  selectedHwId.value = id
+  activeTab.value = 'all'
 }
 
+function getHwSubmissions(hwId) {
+  return getSubmissions().filter(s => s.homeworkId === hwId)
+}
+
+// 已提交学生（含提交信息）
 const submittedStudents = computed(() => {
-  const map = {}
-  for (const file of uploadedFiles.value) {
-    const studentId = extractStudentId(file.name)
-    if (studentId) {
-      if (!map[studentId]) map[studentId] = { id: studentId, files: [] }
-      map[studentId].files.push(file.name)
-    }
-  }
-  return Object.values(map)
-})
-
-const notSubmittedStudents = computed(() => {
-  const submittedIds = new Set(submittedStudents.value.map(s => s.id))
-  return studentList.value.filter(id => !submittedIds.has(id))
-})
-
-function triggerFileInput() { fileInput.value.click() }
-function handleFileSelect(event) {
-  const files = Array.from(event.target.files)
-  uploadedFiles.value = [...uploadedFiles.value, ...files]
-  event.target.value = ''
-}
-function handleDrop(event) {
-  isDragging.value = false
-  const files = Array.from(event.dataTransfer.files)
-  uploadedFiles.value = [...uploadedFiles.value, ...files]
-}
-function clearFiles() { uploadedFiles.value = [] }
-
-function exportNotSubmitted() {
-  const text = notSubmittedStudents.value.join('\n')
-  navigator.clipboard.writeText(text).then(() => {
-    alert('已复制未交作业名单到剪贴板！')
-  }).catch(() => {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    document.body.appendChild(ta)
-    ta.select()
-    document.execCommand('copy')
-    document.body.removeChild(ta)
-    alert('已复制未交作业名单到剪贴板！')
+  if (!selectedHwId.value) return []
+  const subs = getHwSubmissions(selectedHwId.value)
+  const students = curStudents()
+  return students.filter(s => {
+    const sid = s.studentId || s.id
+    return subs.some(sub => sub.studentId === sid)
+  }).map(s => {
+    const sid = s.studentId || s.id
+    const sub = subs.find(sub => sub.studentId === sid)
+    return { ...s, submitted: true, submittedAt: sub?.submittedAt }
   })
+})
+
+// 未提交学生
+const notSubmittedStudents = computed(() => {
+  const submittedIds = new Set(submittedStudents.value.map(s => s.studentId || s.id))
+  return curStudents().filter(s => {
+    const sid = s.studentId || s.id
+    return !submittedIds.has(sid)
+  })
+})
+
+// 全部学生状态
+const allStudentsStatus = computed(() => {
+  const submitted = submittedStudents.value.map(s => ({ ...s, submitted: true }))
+  const notSubmitted = notSubmittedStudents.value.map(s => ({ ...s, submitted: false }))
+  return [...submitted, ...notSubmitted]
+})
+
+// 一键同步积分（仅允许一次）
+function applyAllScores() {
+  if (!selectedHwId.value) return
+  if (isSynced.value) { alert('该作业积分已同步，不可重复操作！'); return }
+  const hwTitle = selectedHw.value?.title || '作业'
+
+  // 已提交 +2分（主动探究）
+  submittedStudents.value.forEach(s => {
+    addBehavior({
+      type: '主动探究',
+      studentId: s.studentId || s.id,
+      score: 2,
+      note: `提交作业「${hwTitle}」+2分`
+    })
+  })
+
+  // 未提交 -1分（未提交作业）
+  notSubmittedStudents.value.forEach(s => {
+    addBehavior({
+      type: '未提交作业',
+      studentId: s.studentId || s.id,
+      score: 1,
+      note: `未提交作业「${hwTitle}」-1分`
+    })
+  })
+
+  // 持久化记录已同步
+  addSyncedId(selectedHwId.value)
+  alert(`积分同步完成！\n已提交 ${submittedStudents.value.length} 人 +2分\n未提交 ${notSubmittedStudents.value.length} 人 -1分\n\n可在「学生信息」和「课堂行为」中查看。`)
 }
 
-function generateReport() {
-  let report = '=== 作业检查报告 ===\n\n'
-  report += '总人数: ' + studentList.value.length + '\n'
-  report += '已交: ' + submittedStudents.value.length + '\n'
-  report += '未交: ' + notSubmittedStudents.value.length + '\n\n'
-  report += '--- 已交作业 ---\n'
-  for (const s of submittedStudents.value) report += s.id + ': ' + s.files.join(', ') + '\n'
-  report += '\n--- 未交作业 ---\n'
-  for (const id of notSubmittedStudents.value) report += id + '\n'
-  return report
-}
-
-function exportTxt() {
-  const report = generateReport()
-  const blob = new Blob([report], { type: 'text/plain;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = '作业检查报告.txt'
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-function exportXls() {
-  const submittedIds = new Set(submittedStudents.value.map(s => s.id))
-  const fileMap = {}
-  for (const s of submittedStudents.value) fileMap[s.id] = s.files.join(', ')
-  const data = [
-    ['学号', '提交状态', '提交文件'],
-    ...studentList.value.map(id => [id, submittedIds.has(id) ? '已交' : '未交', submittedIds.has(id) ? fileMap[id] : ''])
-  ]
+// 导出报告
+function exportReport() {
+  if (!selectedHwId.value) return
+  const hw = selectedHw.value
+  const students = curStudents()
+  const subs = getHwSubmissions(selectedHwId.value)
+  const data = [['学号', '姓名', '提交状态', '提交时间', '积分变动']]
+  students.forEach(s => {
+    const sid = s.studentId || s.id
+    const sub = subs.find(sub => sub.studentId === sid)
+    data.push([
+      sid, s.name,
+      sub ? '已提交' : '未提交',
+      sub ? formatDate(sub.submittedAt) : '',
+      sub ? '+2' : '-1'
+    ])
+  })
   const ws = XLSX.utils.aoa_to_sheet(data)
-  ws['!cols'] = [{ wch: 15 }, { wch: 10 }, { wch: 50 }]
+  ws['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 18 }, { wch: 10 }]
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, '作业检查')
-  XLSX.writeFile(wb, '作业检查报告.xls')
+  XLSX.utils.book_append_sheet(wb, ws, '作业提交统计')
+  XLSX.writeFile(wb, hw.title + '_提交统计.xlsx')
+}
+
+function formatDate(d) {
+  if (!d) return ''
+  const dt = new Date(d)
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0')
+}
+function formatTime(d) {
+  if (!d) return ''
+  const dt = new Date(d)
+  return String(dt.getMonth() + 1) + '/' + String(dt.getDate()).padStart(2, '0') + ' ' + String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0')
 }
 </script>
 
 <style scoped>
-.app { min-height: 100vh; background: #f0f2f5; }
-.header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: center; padding: 2rem 1rem; }
-.header h1 { margin: 0; font-size: 2rem; }
-.subtitle { margin: 0.5rem 0 0; opacity: 0.9; font-size: 1rem; }
-.main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
-.card { background: white; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
-.card h2 { margin: 0 0 0.5rem; font-size: 1.25rem; color: #333; }
-.hint { color: #888; font-size: 0.875rem; margin: 0 0 1rem; }
-.student-input { width: 100%; border: 2px solid #e0e0e0; border-radius: 8px; padding: 0.75rem; font-size: 0.95rem; resize: vertical; font-family: monospace; box-sizing: border-box; }
-.student-input:focus { outline: none; border-color: #667eea; }
-.student-count, .file-count { margin-top: 0.75rem; color: #667eea; font-size: 0.9rem; }
-.upload-area { border: 2px dashed #d0d0d0; border-radius: 12px; padding: 2.5rem; text-align: center; cursor: pointer; transition: all 0.2s; background: #fafafa; }
-.upload-area:hover, .upload-area.dragging { border-color: #667eea; background: #f0f3ff; }
-.upload-icon { font-size: 3rem; margin-bottom: 0.5rem; }
-.upload-area p { color: #666; margin: 0; }
-.btn-clear { margin-left: 1rem; background: #ff4d4f; color: white; border: none; padding: 0.25rem 0.75rem; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
-.stats { display: flex; gap: 1rem; margin-bottom: 1.5rem; }
-.stat-item { flex: 1; text-align: center; padding: 1rem; border-radius: 8px; background: #f8f9fa; }
-.stat-item.submitted { background: #f0fff4; border: 1px solid #b7eb8f; }
-.stat-item.not-submitted { background: #fff2f0; border: 1px solid #ffccc7; }
-.stat-item.total { background: #f0f5ff; border: 1px solid #adc6ff; }
-.stat-number { display: block; font-size: 2rem; font-weight: bold; }
-.stat-label { font-size: 0.875rem; color: #666; }
-.tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; border-bottom: 2px solid #f0f0f0; }
-.tab { padding: 0.5rem 1rem; border: none; background: none; cursor: pointer; font-size: 0.9rem; color: #666; border-bottom: 2px solid transparent; margin-bottom: -2px; }
-.tab:hover { color: #667eea; }
-.tab.active { color: #667eea; border-bottom-color: #667eea; font-weight: 600; }
-.result-list { max-height: 400px; overflow-y: auto; }
-.result-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; border-radius: 8px; margin-bottom: 0.5rem; }
-.result-item.success { background: #f0fff4; border-left: 3px solid #52c41a; }
-.result-item.danger { background: #fff2f0; border-left: 3px solid #ff4d4f; }
-.result-item.file-item { background: #f9f9f9; border-left: 3px solid #667eea; }
-.student-id { font-weight: 600; font-family: monospace; font-size: 1rem; min-width: 100px; }
-.file-list { display: flex; flex-wrap: wrap; gap: 0.25rem; }
-.file-tag { background: #e8f5e9; color: #2e7d32; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
-.file-name { font-family: monospace; font-size: 0.9rem; }
-.file-student { margin-left: auto; font-size: 0.8rem; color: #888; }
-.file-student.unmatched { color: #fa8c16; }
-.empty { text-align: center; padding: 2rem; color: #999; }
-.export-area { display: flex; gap: 0.75rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #f0f0f0; }
-.btn-export { padding: 0.5rem 1.25rem; border: 1px solid #667eea; background: white; color: #667eea; border-radius: 6px; cursor: pointer; font-size: 0.9rem; }
-.btn-export:hover { background: #667eea; color: white; }
-.btn-export-xls { border-color: #52c41a; color: #52c41a; }
-.btn-export-xls:hover { background: #52c41a; color: white; }
+.hc-header { background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%); color: white; padding: 20px 28px; border-radius: 12px; margin-bottom: 20px; }
+.hc-header h1 { font-size: 20px; margin: 0 0 6px; }
+.hc-subtitle { margin: 0; opacity: 0.9; font-size: 13px; }
+
+.hc-card { background: var(--bg-card); border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: var(--shadow); }
+.hc-card h2 { font-size: 17px; margin-bottom: 16px; color: var(--text-primary); }
+
+.hc-empty { text-align: center; color: var(--text-light); padding: 30px; }
+.hc-empty-inline { text-align: center; color: var(--text-light); padding: 20px; }
+
+.hw-select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+.hw-select-item { border: 2px solid var(--border); border-radius: 10px; padding: 14px 16px; cursor: pointer; transition: .2s; }
+.hw-select-item:hover { border-color: var(--primary); background: var(--bg-hover); }
+.hw-select-item.active { border-color: var(--primary); background: var(--primary-bg); box-shadow: 0 2px 8px rgba(30,136,229,.15); }
+.hw-select-item.synced { border-color: #b7eb8f; }
+.hw-select-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.hw-select-meta { font-size: 12px; color: var(--primary); font-weight: 600; }
+.hw-select-date { font-size: 11px; color: var(--text-light); margin-top: 4px; }
+
+.hc-result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
+.hc-result-header h2 { margin-bottom: 0; }
+.hc-actions { display: flex; gap: 8px; }
+
+.hc-stats-row { display: flex; gap: 12px; margin-bottom: 16px; }
+.hc-stat { flex: 1; text-align: center; padding: 16px 12px; border-radius: 10px; }
+.hc-stat-total { background: #f0f5ff; border: 1px solid #adc6ff; }
+.hc-stat-submitted { background: #f0fff4; border: 1px solid #b7eb8f; }
+.hc-stat-not { background: #fff2f0; border: 1px solid #ffccc7; }
+.hc-stat-num { display: block; font-size: 28px; font-weight: 700; line-height: 1.2; }
+.hc-stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+.hc-score-info { background: #fffbe6; border: 1px solid #ffe58f; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+.hc-score-done { background: #f0fff4; border-color: #b7eb8f; }
+
+.hc-tabs { display: flex; gap: 0; border-bottom: 2px solid var(--border-light); margin-bottom: 12px; }
+.hc-tab { padding: 10px 18px; border: none; background: none; cursor: pointer; font-size: 13px; color: var(--text-secondary); border-bottom: 2px solid transparent; margin-bottom: -2px; transition: .15s; }
+.hc-tab:hover { color: var(--primary); }
+.hc-tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+
+.hc-list { max-height: 500px; overflow-y: auto; }
+.hc-list-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 8px; margin-bottom: 6px; border-left: 3px solid transparent; }
+.hc-list-item.hc-ok { background: #f0fff4; border-left-color: #52c41a; }
+.hc-list-item.hc-fail { background: #fff2f0; border-left-color: #ff4d4f; }
+.hc-sid { font-family: monospace; font-size: 13px; font-weight: 600; min-width: 90px; color: var(--text-primary); }
+.hc-name { flex: 1; font-size: 13px; }
+.hc-status-icon { font-size: 16px; }
+.hc-status-text { font-size: 12px; color: var(--text-secondary); min-width: 50px; }
+.hc-time { font-size: 11px; color: var(--text-light); min-width: 70px; }
+.hc-score-tag { padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 700; }
+.score-pos { background: #e8f5e9; color: #2e7d32; }
+.score-neg { background: #fde8e8; color: #c62828; }
+
+.hw-btn { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: .15s; }
+.hw-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.hw-btn-green { background: #27ae60; color: #fff; } .hw-btn-green:hover:not(:disabled) { background: #219a52; }
+.hw-btn-blue { background: #3498db; color: #fff; } .hw-btn-blue:hover { background: #2980b9; }
+
+.synced-badge { display: inline-block; background: #27ae60; color: #fff; font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 600; vertical-align: middle; margin-left: 4px; }
 </style>
