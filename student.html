@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学生学习端</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f4f6fb;color:#1f2d3d;font-size:14px;line-height:1.6}
+:root{--primary:#667eea;--primary-dark:#764ba2;--green:#27ae60;--red:#e74c3c;--orange:#f39c12;--border:#e0e6ed;--bg-card:#fff;--bg-hover:#eef4fb;--text-light:#aab4c0;--text-sec:#5a6b7b;--radius:12px;--shadow:0 4px 15px rgba(0,0,0,.1)}
+.page{min-height:100vh;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:20px}
+.header{text-align:center;color:#fff;margin-bottom:24px}
+.header h1{font-size:26px;margin-bottom:4px}
+.header p{opacity:.85;font-size:14px}
+
+/* 登录 */
+.login-card{background:#fff;border-radius:16px;padding:40px;max-width:420px;margin:40px auto;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+.login-card h2{text-align:center;color:#333;margin-bottom:24px;font-size:22px}
+.login-card .icon{text-align:center;font-size:56px;margin-bottom:12px}
+.fg{margin-bottom:16px}
+.fg label{display:block;margin-bottom:6px;color:#555;font-weight:600;font-size:14px}
+.fg input,.fg select,.fg textarea{width:100%;padding:11px 14px;border:2px solid #e0e0e0;border-radius:8px;font-size:15px;box-sizing:border-box;transition:border-color .2s}
+.fg input:focus,.fg select:focus,.fg textarea:focus{outline:none;border-color:#667eea}
+.btn-login{width:100%;padding:13px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer;margin-top:8px;transition:opacity .2s}
+.btn-login:hover{opacity:.9}
+.error-msg{color:#e74c3c;text-align:center;margin-top:12px;font-size:14px;background:#fde8e8;padding:8px 12px;border-radius:8px}
+
+/* 欢迎栏 */
+.welcome-bar{background:#fff;border-radius:12px;padding:16px 24px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center;box-shadow:var(--shadow)}
+.welcome-bar .info{color:#333;font-size:15px}
+.welcome-bar .info strong{color:#667eea}
+.logout-btn{padding:8px 20px;background:#e74c3c;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px}
+
+/* 标签切换 */
+.tab-bar{display:flex;gap:0;background:#fff;border-radius:12px 12px 0 0;overflow:hidden;margin-bottom:0;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.tab-btn{flex:1;padding:14px 20px;border:none;background:none;cursor:pointer;font-size:15px;font-weight:600;color:#5a6b7b;border-bottom:3px solid transparent;transition:.2s}
+.tab-btn:hover{color:#667eea;background:rgba(102,126,234,.06)}
+.tab-btn.active{color:#667eea;border-bottom-color:#667eea;background:#eef2ff}
+.tab-content{background:#fff;border-radius:0 0 12px 12px;padding:24px;margin-bottom:20px;box-shadow:0 4px 15px rgba(0,0,0,.1);min-height:300px}
+
+/* 作业列表 */
+.section-title{font-size:18px;font-weight:700;color:#333;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.hw-list{display:grid;gap:16px}
+.hw-card{background:#fafbff;border:1px solid #e8ecf4;border-radius:12px;padding:20px;transition:box-shadow .2s}
+.hw-card:hover{box-shadow:0 4px 16px rgba(102,126,234,.15)}
+.hw-card h3{color:#333;margin-bottom:8px;font-size:16px}
+.hw-card .desc{color:#666;margin-bottom:10px;line-height:1.6;font-size:13px;white-space:pre-wrap;max-height:120px;overflow-y:auto}
+.hw-card .meta{display:flex;justify-content:space-between;align-items:center;color:#999;font-size:13px;margin-bottom:8px}
+.badge{padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600}
+.badge-ok{background:#d4edda;color:#155724}
+.badge-wait{background:#fff3cd;color:#856404}
+.grade-card{margin-top:12px;padding:12px;border-radius:8px;border-left:4px solid #ccc;background:#fff}
+.grade-card.lvl-A{border-left-color:#27ae60;background:#e8f8f0}
+.grade-card.lvl-B{border-left-color:#3498db;background:#e8f4fd}
+.grade-card.lvl-C{border-left-color:#f39c12;background:#fff9e6}
+.grade-card.lvl-D{border-left-color:#e74c3c;background:#fde8e8}
+.grade-header{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.grade-tag{padding:3px 12px;border-radius:4px;font-size:13px;font-weight:700;color:#fff}
+.grade-tag.A{background:#27ae60}.grade-tag.B{background:#3498db}.grade-tag.C{background:#f39c12}.grade-tag.D{background:#e74c3c}
+.grade-comment{color:#555;font-size:13px}
+.btn-submit-hw{margin-top:10px;padding:9px 22px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600}
+.btn-submit-hw:hover{opacity:.9}
+.empty-state{text-align:center;color:#fff;padding:50px 20px;opacity:.8}
+.empty-state .icon{font-size:48px;margin-bottom:12px}
+
+/* 附件列表 */
+.attach-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+.attach-item{display:flex;align-items:center;gap:6px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:8px;padding:6px 12px;font-size:13px;color:#4338ca}
+.attach-item .att-icon{font-size:16px}
+.attach-item .att-name{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attach-item .att-size{color:#999;font-size:11px}
+.attach-item .att-del{cursor:pointer;color:#e74c3c;font-size:14px;margin-left:4px}
+.attach-item .att-del:hover{color:#c0392b}
+.btn-view{padding:4px 10px;background:#3498db;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px}
+.btn-dl{padding:4px 10px;background:#27ae60;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px}
+
+/* 上传区域 */
+.upload-area{border:2px dashed #c7d2fe;border-radius:10px;padding:16px;text-align:center;cursor:pointer;transition:.2s;margin-top:8px}
+.upload-area:hover{border-color:#667eea;background:#f5f7ff}
+.upload-area .up-icon{font-size:28px;margin-bottom:6px}
+.upload-area .up-text{color:#666;font-size:13px}
+.upload-area .up-hint{color:#aaa;font-size:11px;margin-top:4px}
+
+/* 密码操作区 */
+.pwd-section{margin-top:14px;padding:14px;background:#fffbe6;border:1px solid #ffe58f;border-radius:10px}
+.pwd-section .pwd-title{font-size:13px;font-weight:600;color:#856404;margin-bottom:8px}
+.pwd-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pwd-row input{padding:8px 12px;border:2px solid #e0e0e0;border-radius:6px;font-size:13px;width:160px}
+.pwd-row input:focus{outline:none;border-color:#667eea}
+.btn-pwd{padding:7px 16px;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;color:#fff}
+.btn-pwd-del{background:#e74c3c}
+.btn-pwd-resub{background:#667eea}
+.btn-pwd:hover{opacity:.85}
+
+/* 考勤表单 */
+.att-form{max-width:640px;margin:0 auto}
+.att-row{display:flex;gap:16px}
+.att-row .fg{flex:1}
+.att-fg{margin-bottom:18px}
+.att-fg label{display:block;font-size:14px;font-weight:600;color:#333;margin-bottom:6px}
+.att-fg input,.att-fg select,.att-fg textarea{width:100%;padding:10px 14px;border:2px solid #e0e0e0;border-radius:8px;font-size:14px;box-sizing:border-box}
+.att-fg input:focus,.att-fg select:focus,.att-fg textarea:focus{outline:none;border-color:#667eea}
+.att-fg .readonly{background:#f5f5f5;color:#666;cursor:not-allowed}
+fieldset{border:2px solid #f0f0f0;border-radius:10px;padding:16px;margin-bottom:18px}
+legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
+.radio-group{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+.radio-label{display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 14px;border-radius:8px;border:2px solid #e8e8e8;transition:.15s}
+.radio-label:has(input:checked){border-color:#667eea;background:rgba(102,126,234,.08)}
+.btn-att{width:100%;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:10px;font-size:16px;font-weight:600;padding:14px;cursor:pointer;margin-top:10px}
+.success-card{text-align:center;padding:40px 20px}
+.success-card .icon{font-size:64px;margin-bottom:16px}
+.success-card h2{color:#27ae60;margin-bottom:12px}
+.success-card p{color:#555;margin-bottom:20px}
+.btn-continue{padding:10px 28px;background:#667eea;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+
+/* 弹窗 */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal{background:#fff;border-radius:16px;padding:30px;width:90%;max-width:560px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal h2{color:#333;margin-bottom:8px}
+.modal .hw-info{color:#666;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #eee;font-size:14px;white-space:pre-wrap}
+.modal textarea{width:100%;padding:12px 14px;border:2px solid #e0e0e0;border-radius:8px;font-size:15px;line-height:1.8;box-sizing:border-box;min-height:200px;resize:vertical}
+.modal textarea:focus{outline:none;border-color:#667eea}
+.modal-btns{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+.modal-btns .cancel{padding:10px 20px;background:#e0e0e0;color:#333;border:none;border-radius:8px;cursor:pointer}
+.modal-btns .submit{padding:10px 20px;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600}
+.modal-btns .submit:disabled{opacity:.5;cursor:not-allowed}
+
+.required{color:#e74c3c}
+.hint{color:#999;font-size:13px;margin-top:4px}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- 登录 -->
+  <div v-if="!user" class="page">
+    <div class="header">
+      <h1>📚 学生学习端</h1>
+      <p>请输入学号和姓名登录</p>
+    </div>
+    <div class="login-card">
+      <div class="icon">🎓</div>
+      <h2>学生登录</h2>
+      <div class="fg"><label>学号</label><input v-model="loginId" placeholder="请输入学号" @keyup.enter="doLogin" /></div>
+      <div class="fg"><label>姓名</label><input v-model="loginName" placeholder="请输入姓名" @keyup.enter="doLogin" /></div>
+      <div class="fg"><label>班级密码</label><input v-model="loginPwd" type="password" placeholder="请输入老师给的密码" @keyup.enter="doLogin" /></div>
+      <div v-if="loginErr" class="error-msg">{{ loginErr }}</div>
+      <button class="btn-login" @click="doLogin">登 录</button>
+      <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
+      <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
+      <p v-if="!cloudLoading && !cloudData && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
+    </div>
+  </div>
+
+  <!-- 主界面 -->
+  <div v-else class="page">
+    <div class="header"><h1>📚 学生学习端</h1></div>
+    <div class="welcome-bar">
+      <div class="info">欢迎，<strong>{{ user.name }}</strong>（学号：{{ user.studentId }}）</div>
+      <button class="logout-btn" @click="doLogout">退出登录</button>
+    </div>
+
+    <div class="tab-bar">
+      <button class="tab-btn" :class="{active:tab==='homework'}" @click="tab='homework'">📋 作业提交</button>
+      <button class="tab-btn" :class="{active:tab==='attendance'}" @click="tab='attendance'">📝 考勤登记</button>
+    </div>
+
+    <div class="tab-content">
+      <!-- 作业提交 -->
+      <div v-if="tab==='homework'">
+        <div class="section-title">📋 我的作业</div>
+        <div v-if="homeworkList.length===0" class="empty-state"><div class="icon">📭</div><p>暂无作业</p></div>
+        <div v-else class="hw-list">
+          <div v-for="hw in homeworkList" :key="hw.id" class="hw-card">
+            <h3>{{ hw.title }}</h3>
+            <div class="desc">{{ hw.description }}</div>
+            <div class="meta">
+              <span v-if="hw.deadline">截止：{{ fmtDate(hw.deadline) }}</span>
+              <span v-else>无截止时间</span>
+              <span v-if="getSub(hw.id)" class="badge badge-ok">✅ 已提交</span>
+              <span v-else class="badge badge-wait">⏳ 待提交</span>
+            </div>
+            <!-- 已提交：显示附件（仅查看，不可下载） -->
+            <div v-if="getSub(hw.id) && getSub(hw.id).attachments && getSub(hw.id).attachments.length" class="attach-list">
+              <div v-for="(att,ai) in getSub(hw.id).attachments" :key="ai" class="attach-item">
+                <span class="att-icon">📎</span>
+                <span class="att-name" :title="att.name">{{ att.name }}</span>
+                <span class="att-size">{{ fmtSize(att.size) }}</span>
+                <button v-if="pwdVerified[hw.id]" class="btn-dl" @click="dlAtt(getSub(hw.id), ai)">下载</button>
+              </div>
+            </div>
+            <!-- 成绩 -->
+            <div v-if="getSub(hw.id) && getSub(hw.id).grade" class="grade-card" :class="'lvl-'+getSub(hw.id).grade.level">
+              <div class="grade-header">
+                <span class="grade-tag" :class="getSub(hw.id).grade.level">{{ lvlText(getSub(hw.id).grade.level) }}</span>
+                <span style="color:#999;font-size:12px">{{ fmtDate(getSub(hw.id).grade.gradedAt) }}</span>
+              </div>
+              <div class="grade-comment"><strong>评语：</strong>{{ getSub(hw.id).grade.comment }}</div>
+            </div>
+            <!-- 未提交：提交按钮 -->
+            <button v-if="!getSub(hw.id)" class="btn-submit-hw" @click="openSubmit(hw)">提交作业</button>
+            <!-- 已提交：密码操作区 -->
+            <div v-else class="pwd-section">
+              <div class="pwd-title">🔑 输入密码可下载/删除/重新提交文件</div>
+              <div class="pwd-row">
+                <input v-model="pwdInputs[hw.id]" type="text" placeholder="请输入老师给的密码" />
+                <button class="btn-pwd" style="background:#27ae60" @click="pwdVerify(hw)">验证</button>
+                <button v-if="pwdVerified[hw.id]" class="btn-pwd btn-pwd-del" @click="pwdDelete(hw)">删除文件</button>
+                <button v-if="pwdVerified[hw.id]" class="btn-pwd btn-pwd-resub" @click="pwdResubmit(hw)">重新提交</button>
+              </div>
+              <div v-if="pwdVerified[hw.id]" style="color:#27ae60;font-size:12px;margin-top:6px">✅ 密码验证成功，可下载/管理文件</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 考勤登记 -->
+      <div v-if="tab==='attendance'">
+        <div v-if="!attRoster.length" style="text-align:center;padding:40px">
+          <div style="font-size:48px;margin-bottom:12px">⚠️</div>
+          <h2 style="color:#f39c12;margin-bottom:12px">暂无考勤名单</h2>
+          <p style="color:#888">教师尚未导入考勤花名册，请联系教师先完成导入。</p>
+        </div>
+        <div v-else-if="attAlreadySubmitted" class="success-card">
+          <div class="icon">✅</div>
+          <h2>本次考勤已登记</h2>
+          <p>提交时间：<strong>{{ attExistingTime }}</strong></p>
+          <p style="color:#999;font-size:13px">每位同学每次上课只能提交1次考勤登记</p>
+        </div>
+        <div v-else-if="attSubmitted" class="success-card">
+          <div class="icon">✅</div>
+          <h2>登记成功！</h2>
+          <p>提交时间：<strong>{{ attSubmitTime }}</strong></p>
+          <button class="btn-continue" @click="resetAtt">继续登记</button>
+        </div>
+        <div v-else class="att-form">
+          <div class="section-title">📝 课堂考勤登记</div>
+          <div class="att-row">
+            <div class="att-fg"><label>班级</label><input :value="user.className" class="readonly" readonly /></div>
+            <div class="att-fg"><label>学号</label><input :value="user.studentId" class="readonly" readonly /></div>
+          </div>
+          <div class="att-fg"><label>姓名</label><input :value="user.name" class="readonly" readonly /></div>
+          <div class="att-fg"><label>机器号 <span class="required">*</span></label><input v-model="attForm.machineNo" placeholder="如：A01" /></div>
+          <fieldset><legend>主机使用情况 <span class="required">*</span></legend>
+            <div class="radio-group">
+              <label class="radio-label" v-for="o in hostOpts" :key="o.v"><input type="radio" v-model="attForm.hostUsage" :value="o.v" /><span>{{ o.l }}</span></label>
+            </div>
+          </fieldset>
+          <fieldset><legend>鼠标使用情况 <span class="required">*</span></legend>
+            <div class="radio-group">
+              <label class="radio-label" v-for="o in mouseOpts" :key="o.v"><input type="radio" v-model="attForm.mouseUsage" :value="o.v" /><span>{{ o.l }}</span></label>
+            </div>
+          </fieldset>
+          <fieldset><legend>卫生情况 <span class="required">*</span></legend>
+            <div class="radio-group">
+              <label class="radio-label" v-for="o in hygOpts" :key="o.v"><input type="radio" v-model="attForm.hygiene" :value="o.v" /><span>{{ o.l }}</span></label>
+            </div>
+          </fieldset>
+          <div class="att-fg"><label>备注（选填）</label><textarea v-model="attForm.remark" rows="2" placeholder="如有特殊情况请说明"></textarea></div>
+          <button class="btn-att" @click="submitAtt">提交登记</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 作业提交弹窗 -->
+  <div v-if="submitModal" class="modal-overlay" @click.self="submitModal=null">
+    <div class="modal">
+      <h2>提交作业</h2>
+      <div class="hw-info">{{ submitModal.title }}</div>
+      <div class="fg"><label>作业内容</label>
+        <textarea v-model="submitContent" placeholder="请在此输入作业内容..."></textarea>
+      </div>
+      <div class="fg">
+        <label>附件上传</label>
+        <div class="upload-area" @click="$refs.fileInput.click()">
+          <div class="up-icon">📁</div>
+          <div class="up-text">点击选择文件</div>
+          <div class="up-hint">支持各类文件，单个文件不超过5MB</div>
+        </div>
+        <input ref="fileInput" type="file" multiple @change="onFileSelect" style="display:none" />
+      </div>
+      <div v-if="pendingFiles.length" class="attach-list">
+        <div v-for="(f,i) in pendingFiles" :key="i" class="attach-item">
+          <span class="att-icon">📎</span>
+          <span class="att-name">{{ f.name }}</span>
+          <span class="att-size">{{ fmtSize(f.size) }}</span>
+          <span class="att-del" @click="removeFile(i)" title="移除">✕</span>
+        </div>
+      </div>
+      <div class="modal-btns">
+        <button class="cancel" @click="submitModal=null;pendingFiles=[]">取消</button>
+        <button class="submit" @click="doSubmitHw" :disabled="!submitContent.trim() && !pendingFiles.length">提交</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script>
+if (typeof Vue === 'undefined') {
+  document.write('<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>')
+}
+</script>
+<script>
+const { createApp, ref, reactive, computed, onMounted } = Vue
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
+
+/* ===== 云端数据配置 ===== */
+/* 教师在「数据同步」页面点击「发布学生数据」后，将生成的 Gist ID 填入下方 */
+const CLOUD_GIST_ID = '' // 例如: 'abc123def456'
+/* ======================== */
+
+createApp({
+  setup() {
+    const loginId = ref('')
+    const loginName = ref('')
+    const loginPwd = ref('')
+    const loginErr = ref('')
+    const user = ref(null)
+    const tab = ref('homework')
+    const cloudData = ref(null)
+    const cloudLoading = ref(false)
+    const cloudEncrypted = ref(false) // 云端数据是否已加密
+    const cloudPayload = ref(null) // 加密的原始数据
+
+    /* ---- AES 解密 (Web Crypto API) ---- */
+    function b642buf(b64) { return Uint8Array.from(atob(b64), c => c.charCodeAt(0)) }
+    async function deriveKey(password, salt) {
+      const enc = new TextEncoder()
+      const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey'])
+      return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+      )
+    }
+    async function decryptPayload(payload, password) {
+      const salt = b642buf(payload.salt)
+      const iv = b642buf(payload.iv)
+      const key = await deriveKey(password, salt)
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, b642buf(payload.data))
+      return JSON.parse(new TextDecoder().decode(decrypted))
+    }
+
+    /* 从公开 Gist 获取云端数据（可能已加密） */
+    async function fetchCloudData() {
+      const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
+      if (!gid) return null
+      try {
+        const resp = await fetch('https://api.github.com/gists/' + gid)
+        if (!resp.ok) return null
+        const gist = await resp.json()
+        const file = gist.files['student_data.json']
+        if (!file) return null
+        const payload = JSON.parse(file.content)
+        localStorage.setItem('stu_cloud_gist_id', gid)
+        if (payload.encrypted) {
+          // 数据已加密，保存密文等待用户输入密码
+          cloudEncrypted.value = true
+          cloudPayload.value = payload
+          return null
+        } else {
+          // 未加密，直接使用
+          cloudData.value = payload
+          return payload
+        }
+      } catch (e) {
+        console.warn('云端数据获取失败:', e)
+        return null
+      }
+    }
+
+    /* 用密码解密云端数据 */
+    async function decryptCloudData(password) {
+      if (!cloudPayload.value) return false
+      try {
+        const data = await decryptPayload(cloudPayload.value, password)
+        cloudData.value = data
+        cloudEncrypted.value = false
+        return true
+      } catch (e) {
+        return false
+      }
+    }
+
+    function getAllStudents() {
+      // 优先使用云端数据
+      if (cloudData.value && cloudData.value.students) {
+        return cloudData.value.students
+      }
+      // 回退到本地 localStorage
+      const mgmt = JSON.parse(localStorage.getItem('teaching_mgmt_v3') || '{}')
+      const sts = []
+      if (mgmt.classes) {
+        Object.values(mgmt.classes).forEach(c => {
+          if (c.data && c.data.students) {
+            c.data.students.forEach(s => {
+              sts.push({ studentId: s.studentId || s.id, name: s.name, className: c.info ? c.info.name : '', grade: c.info ? c.info.grade : '', classNo: c.info ? c.info.classNo : '' })
+            })
+          }
+        })
+      }
+      const hwStus = JSON.parse(localStorage.getItem('hw_students') || '[]')
+      hwStus.forEach(s => {
+        if (!sts.find(x => x.studentId === s.id && x.name === s.name)) {
+          sts.push({ studentId: s.id, name: s.name, className: (s.grade || '') + (s.class || ''), grade: s.grade || '', classNo: s.class || '' })
+        }
+      })
+      const roster = JSON.parse(localStorage.getItem('att_roster') || '[]')
+      roster.forEach(r => {
+        if (!sts.find(x => x.studentId === r.studentId && x.name === r.studentName)) {
+          sts.push({ studentId: r.studentId, name: r.studentName, className: r.className || '', grade: '', classNo: '' })
+        }
+      })
+      return sts
+    }
+
+    async function doLogin() {
+      loginErr.value = ''
+      const id = loginId.value.trim()
+      const name = loginName.value.trim()
+      if (!id) { loginErr.value = '请输入学号'; return }
+      if (!name) { loginErr.value = '请输入姓名'; return }
+      // 如果云端数据已加密，先用密码解密
+      if (cloudEncrypted.value) {
+        const pwd = loginPwd.value.trim()
+        if (!pwd) { loginErr.value = '请输入班级密码'; return }
+        loginErr.value = '正在解密数据…'
+        const ok = await decryptCloudData(pwd)
+        if (!ok) { loginErr.value = '密码错误，无法解密数据'; return }
+        loadAttRoster()
+      }
+      const sts = getAllStudents()
+      const found = sts.find(s => s.studentId === id && s.name === name)
+      if (!found) { loginErr.value = '学号或姓名不正确，请检查'; return }
+      user.value = found
+      loginId.value = ''; loginName.value = ''; loginPwd.value = ''
+      localStorage.setItem('stu_login', JSON.stringify(found))
+    }
+    function doLogout() { user.value = null; localStorage.removeItem('stu_login') }
+
+    // ---- 作业 ----
+    function getHomework() {
+      if (cloudData.value && cloudData.value.homework) return cloudData.value.homework
+      return JSON.parse(localStorage.getItem('hw_homework') || '[]')
+    }
+    function getSubmissions() {
+      if (cloudData.value && cloudData.value.submissions) {
+        // 合并云端和本地提交记录
+        const local = JSON.parse(localStorage.getItem('hw_submissions') || '[]')
+        const cloud = cloudData.value.submissions
+        const merged = [...cloud]
+        local.forEach(ls => {
+          const idx = merged.findIndex(cs => cs.studentId === ls.studentId && cs.homeworkId === ls.homeworkId)
+          if (idx >= 0) merged[idx] = ls; else merged.push(ls)
+        })
+        return merged
+      }
+      return JSON.parse(localStorage.getItem('hw_submissions') || '[]')
+    }
+    const homeworkList = computed(() => getHomework().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)))
+
+    function getSub(hwId) {
+      if (!user.value) return null
+      return getSubmissions().find(s => s.studentId === user.value.studentId && s.homeworkId === hwId) || null
+    }
+
+    const submitModal = ref(null)
+    const submitContent = ref('')
+    const pendingFiles = ref([]) // { name, type, size, data(base64) }
+
+    function openSubmit(hw) {
+      submitModal.value = hw
+      submitContent.value = ''
+      pendingFiles.value = []
+    }
+
+    function onFileSelect(e) {
+      const files = Array.from(e.target.files)
+      for (const f of files) {
+        if (f.size > MAX_FILE_SIZE) { alert('文件 "' + f.name + '" 超过5MB限制，已跳过'); continue }
+        const reader = new FileReader()
+        reader.onload = (ev) => {
+          pendingFiles.value.push({ name: f.name, type: f.type, size: f.size, data: ev.target.result })
+        }
+        reader.readAsDataURL(f)
+      }
+      e.target.value = ''
+    }
+
+    function removeFile(i) { pendingFiles.value.splice(i, 1) }
+
+    function doSubmitHw() {
+      if ((!submitContent.value.trim() && !pendingFiles.value.length) || !user.value) return
+      const subs = getSubmissions()
+      const existing = subs.findIndex(s => s.studentId === user.value.studentId && s.homeworkId === submitModal.value.id)
+      const newSub = {
+        id: existing >= 0 ? subs[existing].id : Date.now().toString(),
+        studentId: user.value.studentId,
+        studentName: user.value.name,
+        homeworkId: submitModal.value.id,
+        content: submitContent.value,
+        attachments: pendingFiles.value.map(f => ({ name: f.name, type: f.type, size: f.size, data: f.data })),
+        submittedAt: new Date().toISOString(),
+        grade: existing >= 0 ? subs[existing].grade : null
+      }
+      if (existing >= 0) subs[existing] = newSub; else subs.push(newSub)
+      try {
+        localStorage.setItem('hw_submissions', JSON.stringify(subs))
+      } catch (e) {
+        alert('存储空间不足，请减少附件大小或数量')
+        return
+      }
+      submitModal.value = null
+      pendingFiles.value = []
+      alert('作业提交成功！')
+    }
+
+    // 下载附件
+    function dlAtt(sub, ai) {
+      const att = sub.attachments[ai]
+      if (!att) return
+      const a = document.createElement('a')
+      a.href = att.data
+      a.download = att.name
+      a.click()
+    }
+
+    // ---- 密码操作 ----
+    const pwdInputs = reactive({})
+    const pwdVerified = reactive({})
+
+    function verifyPwd(hw) {
+      const pwd = (pwdInputs[hw.id] || '').trim()
+      if (!pwd) { alert('请输入密码'); return false }
+      if (pwd !== hw.downloadPassword) { alert('密码错误'); return false }
+      return true
+    }
+
+    function pwdVerify(hw) {
+      if (!hw.downloadPassword) { alert('该作业未设置密码'); return }
+      const pwd = (pwdInputs[hw.id] || '').trim()
+      if (!pwd) { alert('请输入密码'); return }
+      if (pwd !== hw.downloadPassword) { alert('密码错误'); return }
+      pwdVerified[hw.id] = true
+    }
+
+    function pwdDelete(hw) {
+      if (!verifyPwd(hw)) return
+      if (!confirm('确定删除已提交的文件？')) return
+      const subs = getSubmissions()
+      const idx = subs.findIndex(s => s.studentId === user.value.studentId && s.homeworkId === hw.id)
+      if (idx >= 0) {
+        subs[idx].attachments = []
+        subs[idx].content = ''
+        localStorage.setItem('hw_submissions', JSON.stringify(subs))
+        alert('文件已删除')
+      }
+    }
+
+    function pwdResubmit(hw) {
+      if (!verifyPwd(hw)) return
+      openSubmit(hw)
+    }
+
+    // ---- 考勤 ----
+    const attRoster = ref([])
+    const attForm = reactive({ machineNo: '', hostUsage: '', mouseUsage: '', hygiene: '', remark: '' })
+    const attSubmitted = ref(false)
+    const attSubmitTime = ref('')
+    const hostOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
+    const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
+    const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
+    function loadAttRoster() {
+      if (cloudData.value && cloudData.value.attRecords) {
+        attRoster.value = cloudData.value.students ? cloudData.value.students.map(s => ({ studentId: s.studentId, studentName: s.name, className: s.className })) : []
+      } else {
+        attRoster.value = JSON.parse(localStorage.getItem('att_roster') || '[]')
+      }
+    }
+
+    // 检查当前学生是否已提交过考勤（以学号为关键，每次上课只能提交1次）
+    const attAlreadySubmitted = computed(() => {
+      if (!user.value) return false
+      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
+      return records.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
+    })
+    const attExistingTime = computed(() => {
+      if (!user.value) return ''
+      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
+      const rec = records.find(r => r.studentId === user.value.studentId && r.className === user.value.className)
+      return rec ? rec.submitTimeStr : ''
+    })
+
+    function submitAtt() {
+      // 防重复提交：检查该学号是否已登记过
+      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
+      const already = records.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
+      if (already) { alert('你已提交过考勤登记，每位同学每次上课只能提交1次！'); return }
+      if (!attForm.machineNo) { alert('请填写机器号'); return }
+      if (!attForm.hostUsage) { alert('请选择主机使用情况'); return }
+      if (!attForm.mouseUsage) { alert('请选择鼠标使用情况'); return }
+      if (!attForm.hygiene) { alert('请选择卫生情况'); return }
+      const now = new Date()
+      const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), id: Date.now().toString() }
+      records.push(record)
+      localStorage.setItem('att_records', JSON.stringify(records))
+      attSubmitTime.value = now.toLocaleString('zh-CN')
+      attSubmitted.value = true
+    }
+    function resetAtt() {
+      Object.assign(attForm, { machineNo: '', hostUsage: '', mouseUsage: '', hygiene: '', remark: '' })
+      attSubmitted.value = false
+    }
+
+    // ---- 工具 ----
+    function fmtDate(d) {
+      if (!d) return ''
+      const dt = new Date(d)
+      return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0') + ' ' + String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0')
+    }
+    function fmtSize(b) {
+      if (!b) return ''
+      if (b < 1024) return b + 'B'
+      if (b < 1024 * 1024) return (b / 1024).toFixed(1) + 'KB'
+      return (b / (1024 * 1024)).toFixed(1) + 'MB'
+    }
+    function lvlText(l) { return { A: '优秀', B: '良好', C: '合格', D: '不合格' }[l] || '' }
+
+    onMounted(async () => {
+      const saved = localStorage.getItem('stu_login')
+      if (saved) { try { user.value = JSON.parse(saved) } catch { localStorage.removeItem('stu_login') } }
+      cloudLoading.value = true
+      await fetchCloudData()
+      cloudLoading.value = false
+      loadAttRoster()
+    })
+
+    return {
+      loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout,
+      cloudData, cloudLoading, CLOUD_GIST_ID,
+      homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
+      onFileSelect, removeFile, dlAtt,
+      pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
+      attRoster, attForm, attSubmitted, attSubmitTime, attAlreadySubmitted, attExistingTime, hostOpts, mouseOpts, hygOpts, submitAtt, resetAtt,
+      fmtDate, fmtSize, lvlText
+    }
+  }
+}).mount('#app')
+</script>
+</body>
+</html>
