@@ -5,6 +5,24 @@
         <h1>🎓 考勤管理端</h1>
       </div>
       <div class="top-row">
+        <div class="card session-card">
+          <h2>📢 课堂考勤会话</h2>
+          <div v-if="!sessionActive" class="session-idle">
+            <p class="session-hint">点击下方按钮开始上课，学生端将同步开启考勤登记</p>
+            <button class="btn btn-start-class" @click="startClass">▶️ 开始上课</button>
+          </div>
+          <div v-else class="session-active">
+            <div class="session-status">
+              <span class="status-dot"></span>
+              <strong>上课中</strong>
+              <span class="session-time">开始时间：{{ sessionInfo.startedAtStr }}</span>
+            </div>
+            <div class="session-stats">
+              <span>已登记：<strong class="count-highlight">{{ checkedCount }}</strong> / {{ roster.length }} 人</span>
+            </div>
+            <button class="btn btn-end-class" @click="endClass">⏹️ 结束上课</button>
+          </div>
+        </div>
         <div class="card deadline-card">
           <h2>⏰ 考勤截止时间</h2>
           <div class="deadline-form">
@@ -81,7 +99,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import * as XLSX from 'xlsx'
 import { useWorkbench } from '../composables/useWorkbench.js'
 
@@ -98,6 +116,90 @@ const records = ref([])
 const roster = ref([])
 const showAddStudent = ref(false)
 const newStudent = reactive({ className: '', studentId: '', studentName: '' })
+
+// ---- 考勤会话管理 ----
+const sessionActive = ref(false)
+const sessionInfo = reactive({ className: '', startedAt: '', startedAtStr: '' })
+
+function loadSession() {
+  const raw = localStorage.getItem('att_session')
+  if (raw) {
+    try {
+      const s = JSON.parse(raw)
+      if (s && s.active) {
+        sessionActive.value = true
+        sessionInfo.className = s.className || ''
+        sessionInfo.startedAt = s.startedAt || ''
+        sessionInfo.startedAtStr = s.startedAtStr || ''
+      } else {
+        sessionActive.value = false
+      }
+    } catch { sessionActive.value = false }
+  } else {
+    sessionActive.value = false
+  }
+}
+
+function startClass() {
+  if (roster.value.length === 0) { alert('请先同步或添加花名册'); return }
+  if (!confirm('确定开始上课？学生端将同步开启考勤登记。')) return
+  const now = new Date()
+  const info = curInfo()
+  const session = {
+    active: true,
+    className: info ? info.name : '',
+    startedAt: now.toISOString(),
+    startedAtStr: now.toLocaleString('zh-CN'),
+    rosterSnapshot: roster.value.map(r => r.studentId + '|' + r.className)
+  }
+  localStorage.setItem('att_session', JSON.stringify(session))
+  sessionActive.value = true
+  sessionInfo.className = session.className
+  sessionInfo.startedAt = session.startedAt
+  sessionInfo.startedAtStr = session.startedAtStr
+  // 清除上一次的考勤积分同步标记
+  localStorage.removeItem('att_scores_synced')
+  attSynced.value = false
+}
+
+function endClass() {
+  if (!confirm('确定结束上课？学生端将停止考勤登记。')) return
+  const raw = localStorage.getItem('att_session')
+  if (raw) {
+    try {
+      const s = JSON.parse(raw)
+      s.active = false
+      s.endedAt = new Date().toISOString()
+      localStorage.setItem('att_session', JSON.stringify(s))
+    } catch { /* ignore */ }
+  }
+  sessionActive.value = false
+}
+
+const checkedCount = computed(() => {
+  const sr = getSessionRecords()
+  const checked = new Set(sr.map(r => r.className + '|' + r.studentId))
+  return roster.value.filter(r => checked.has(r.className + '|' + r.studentId)).length
+})
+
+// 监听 localStorage 变化，实时刷新记录
+function onStorageChange(e) {
+  if (e.key === 'att_records') loadRecords()
+  if (e.key === 'att_session') loadSession()
+}
+
+// 定时轮询（确保同标签页也能刷新）
+let pollTimer = null
+function startPolling() {
+  if (pollTimer) return
+  pollTimer = setInterval(() => {
+    loadRecords()
+    loadSession()
+  }, 3000)
+}
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+}
 
 function loadRoster() { roster.value = JSON.parse(localStorage.getItem('att_roster') || '[]') }
 function saveRoster() { localStorage.setItem('att_roster', JSON.stringify(roster.value)) }
@@ -135,17 +237,31 @@ function saveDeadline() {
 }
 function formatDL(val) { return val ? new Date(val).toLocaleString('zh-CN') : '' }
 
-const onTime = computed(() => deadline.value ? records.value.filter(r => new Date(r.submitTime).getTime() <= new Date(deadline.value).getTime()) : [])
-const late = computed(() => deadline.value ? records.value.filter(r => new Date(r.submitTime).getTime() > new Date(deadline.value).getTime()) : [])
+function getSessionRecords() {
+  if (!sessionInfo.startedAt) return records.value
+  return records.value.filter(r => new Date(r.submitTime).getTime() >= new Date(sessionInfo.startedAt).getTime())
+}
+
+const onTime = computed(() => {
+  const sr = getSessionRecords()
+  return deadline.value ? sr.filter(r => new Date(r.submitTime).getTime() <= new Date(deadline.value).getTime()) : sr
+})
+const late = computed(() => {
+  const sr = getSessionRecords()
+  return deadline.value ? sr.filter(r => new Date(r.submitTime).getTime() > new Date(deadline.value).getTime()) : sr
+})
 const absent = computed(() => {
-  const checked = new Set(records.value.map(r => r.className + '|' + r.studentId))
+  const sr = getSessionRecords()
+  const checked = new Set(sr.map(r => r.className + '|' + r.studentId))
   return roster.value.filter(r => !checked.has(r.className + '|' + r.studentId))
 })
 
 function exportXLSX() {
   if (roster.value.length === 0) { alert('花名册为空'); return }
   const dl = deadline.value ? new Date(deadline.value).getTime() : 0
-  const checkedMap = new Map(); records.value.forEach(r => checkedMap.set(r.className + '|' + r.studentId, r))
+  // 仅导出当前会话的记录
+  const sessionRecords = getSessionRecords()
+  const checkedMap = new Map(); sessionRecords.forEach(r => checkedMap.set(r.className + '|' + r.studentId, r))
   const data = [['\u73ED\u7EA7', '\u5B66\u53F7', '\u59D3\u540D', '\u72B6\u6001', '\u5F97\u5206', '\u673A\u5668\u53F7', '\u4E3B\u673A', '\u9F20\u6807', '\u536B\u751F', '\u6253\u5361\u65F6\u95F4']]
   roster.value.forEach(item => {
     const rec = checkedMap.get(item.className + '|' + item.studentId)
@@ -189,7 +305,7 @@ function syncAttScores() {
 }
 
 onMounted(() => {
-  loadRoster(); loadRecords()
+  loadRoster(); loadRecords(); loadSession()
   const saved = localStorage.getItem('att_deadline')
   if (saved) { deadline.value = saved; deadlineSaved.value = true }
   // Auto sync on mount
@@ -198,6 +314,15 @@ onMounted(() => {
   if (info && sts.length > 0 && roster.value.length === 0) {
     syncFromWorkbench()
   }
+  // 监听其他标签页的 localStorage 变化
+  window.addEventListener('storage', onStorageChange)
+  // 启动定时轮询
+  startPolling()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('storage', onStorageChange)
+  stopPolling()
 })
 </script>
 
@@ -258,4 +383,19 @@ onMounted(() => {
 .score-plus { color: #27ae60; font-weight: 700; font-size: 16px; }
 .score-zero { color: #f39c12; font-weight: 700; font-size: 16px; }
 .remark-input { width: 100%; padding: 6px 10px; border: 1.5px solid #e0e0e0; border-radius: 6px; font-size: 13px; box-sizing: border-box; }
+
+.session-card { position: relative; overflow: hidden; }
+.session-idle { text-align: center; padding: 10px 0; }
+.session-hint { color: #888; font-size: 13px; margin-bottom: 14px; }
+.btn-start-class { padding: 12px 36px; background: linear-gradient(135deg, #27ae60, #2ecc71); color: #fff; border: none; border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer; transition: transform .15s; }
+.btn-start-class:hover { transform: scale(1.03); }
+.session-active { padding: 6px 0; }
+.session-status { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; color: #333; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; background: #27ae60; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.session-time { color: #888; font-size: 12px; margin-left: auto; }
+.session-stats { margin-bottom: 12px; font-size: 14px; color: #555; }
+.count-highlight { color: #2a5298; font-size: 20px; }
+.btn-end-class { padding: 9px 24px; background: #e74c3c; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.btn-end-class:hover { background: #c0392b; }
 </style>

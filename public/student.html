@@ -217,7 +217,18 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
 
       <!-- 考勤登记 -->
       <div v-if="tab==='attendance'">
-        <div v-if="!attRoster.length" style="text-align:center;padding:40px">
+        <div v-if="!attSessionActive" style="text-align:center;padding:40px">
+          <div style="font-size:48px;margin-bottom:12px">⏳</div>
+          <h2 style="color:#f39c12;margin-bottom:12px">教师尚未开始上课</h2>
+          <p style="color:#888">请等待教师点击「开始上课」后再进行考勤登记</p>
+          <button class="btn-continue" @click="refreshSession" style="margin-top:16px">🔄 刷新状态</button>
+        </div>
+        <div v-else-if="!attInRoster" style="text-align:center;padding:40px">
+          <div style="font-size:48px;margin-bottom:12px">⚠️</div>
+          <h2 style="color:#e74c3c;margin-bottom:12px">你不在考勤花名册中</h2>
+          <p style="color:#888">请联系教师将你加入考勤花名册后再登记</p>
+        </div>
+        <div v-else-if="!attRoster.length" style="text-align:center;padding:40px">
           <div style="font-size:48px;margin-bottom:12px">⚠️</div>
           <h2 style="color:#f39c12;margin-bottom:12px">暂无考勤名单</h2>
           <p style="color:#888">教师尚未导入考勤花名册，请联系教师先完成导入。</p>
@@ -593,41 +604,82 @@ const app = createApp({
     const attForm = reactive({ machineNo: '', hostUsage: '', mouseUsage: '', hygiene: '', remark: '' })
     const attSubmitted = ref(false)
     const attSubmitTime = ref('')
+    const attSession = ref(null) // 当前考勤会话
     const hostOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
+
+    function loadAttSession() {
+      const raw = localStorage.getItem('att_session')
+      if (raw) {
+        try {
+          const s = JSON.parse(raw)
+          attSession.value = (s && s.active) ? s : null
+        } catch { attSession.value = null }
+      } else {
+        attSession.value = null
+      }
+    }
+    function refreshSession() { loadAttSession() }
+
+    const attSessionActive = computed(() => {
+      return !!attSession.value && attSession.value.active === true
+    })
+
+    const attInRoster = computed(() => {
+      if (!user.value || !attSessionActive.value) return false
+      return attRoster.value.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
+    })
+
     function loadAttRoster() {
       if (cloudData.value && cloudData.value.attRecords) {
         attRoster.value = cloudData.value.students ? cloudData.value.students.map(s => ({ studentId: s.studentId, studentName: s.name, className: s.className })) : []
       } else {
-        attRoster.value = JSON.parse(localStorage.getItem('att_roster') || '[]')
+        attRoster.value = safeParse(localStorage.getItem('att_roster'), [])
       }
     }
 
-    // 检查当前学生是否已提交过考勤（以学号为关键，每次上课只能提交1次）
+    // 检查当前学生是否已在本次会话中提交过考勤
     const attAlreadySubmitted = computed(() => {
-      if (!user.value) return false
-      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
-      return records.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
+      if (!user.value || !attSessionActive.value) return false
+      const records = safeParse(localStorage.getItem('att_records'), [])
+      const sessionStart = attSession.value.startedAt
+      return records.some(r =>
+        r.studentId === user.value.studentId &&
+        r.className === user.value.className &&
+        new Date(r.submitTime).getTime() >= new Date(sessionStart).getTime()
+      )
     })
     const attExistingTime = computed(() => {
-      if (!user.value) return ''
-      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
-      const rec = records.find(r => r.studentId === user.value.studentId && r.className === user.value.className)
+      if (!user.value || !attSessionActive.value) return ''
+      const records = safeParse(localStorage.getItem('att_records'), [])
+      const sessionStart = attSession.value.startedAt
+      const rec = records.find(r =>
+        r.studentId === user.value.studentId &&
+        r.className === user.value.className &&
+        new Date(r.submitTime).getTime() >= new Date(sessionStart).getTime()
+      )
       return rec ? rec.submitTimeStr : ''
     })
 
     function submitAtt() {
-      // 防重复提交：检查该学号是否已登记过
-      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
-      const already = records.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
-      if (already) { alert('你已提交过考勤登记，每位同学每次上课只能提交1次！'); return }
+      if (!attSessionActive.value) { alert('教师尚未开始上课，无法登记'); return }
+      if (!attInRoster.value) { alert('你不在考勤花名册中，请联系教师'); return }
+      // 防重复提交：检查该学号在本次会话中是否已登记过
+      const records = safeParse(localStorage.getItem('att_records'), [])
+      const sessionStart = attSession.value.startedAt
+      const already = records.some(r =>
+        r.studentId === user.value.studentId &&
+        r.className === user.value.className &&
+        new Date(r.submitTime).getTime() >= new Date(sessionStart).getTime()
+      )
+      if (already) { alert('你已提交过本次考勤登记，每位同学每次上课只能提交1次！'); return }
       if (!attForm.machineNo) { alert('请填写机器号'); return }
       if (!attForm.hostUsage) { alert('请选择主机使用情况'); return }
       if (!attForm.mouseUsage) { alert('请选择鼠标使用情况'); return }
       if (!attForm.hygiene) { alert('请选择卫生情况'); return }
       const now = new Date()
-      const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), id: Date.now().toString() }
+      const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), sessionId: attSession.value.startedAt, id: Date.now().toString() }
       records.push(record)
       localStorage.setItem('att_records', JSON.stringify(records))
       attSubmitTime.value = now.toLocaleString('zh-CN')
@@ -659,6 +711,13 @@ const app = createApp({
       await fetchCloudData()
       cloudLoading.value = false
       loadAttRoster()
+      loadAttSession()
+      // 监听 localStorage 变化（教师端开始/结束上课、新考勤记录等）
+      window.addEventListener('storage', function(e) {
+        if (e.key === 'att_session') loadAttSession()
+        if (e.key === 'att_records') loadAttRoster()
+        if (e.key === 'att_roster') loadAttRoster()
+      })
     })
 
     return {
@@ -668,6 +727,7 @@ const app = createApp({
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
       attRoster, attForm, attSubmitted, attSubmitTime, attAlreadySubmitted, attExistingTime, hostOpts, mouseOpts, hygOpts, submitAtt, resetAtt,
+      attSession, attSessionActive, attInRoster, refreshSession,
       fmtDate, fmtSize, lvlText
     }
   }
