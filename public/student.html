@@ -148,6 +148,8 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
       <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
       <p v-if="!cloudLoading && !cloudData && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
+      <p v-if="!cloudLoading && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
+      <p v-if="!cloudLoading && localStudentCount > 0" style="text-align:center;color:#27ae60;margin-top:10px;font-size:12px">✅ 已检测到 {{ localStudentCount }} 名学生数据</p>
     </div>
   </div>
 
@@ -295,8 +297,11 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="/teaching-platform/vue.global.prod.js"></script>
 <script>
+if (typeof Vue === 'undefined') {
+  document.write('<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"><\/script>')
+}
 if (typeof Vue === 'undefined') {
   document.write('<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>')
 }
@@ -310,7 +315,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 const CLOUD_GIST_ID = '' // 例如: 'abc123def456'
 /* ======================== */
 
-createApp({
+const app = createApp({
   setup() {
     const loginId = ref('')
     const loginName = ref('')
@@ -385,13 +390,18 @@ createApp({
       }
     }
 
+    function safeParse(json, fallback) {
+      if (json == null) return fallback
+      try { return JSON.parse(json) } catch { return fallback }
+    }
+
     function getAllStudents() {
       // 优先使用云端数据
       if (cloudData.value && cloudData.value.students) {
         return cloudData.value.students
       }
       // 回退到本地 localStorage
-      const mgmt = JSON.parse(localStorage.getItem('teaching_mgmt_v3') || '{}')
+      const mgmt = safeParse(localStorage.getItem('teaching_mgmt_v3'), {})
       const sts = []
       if (mgmt.classes) {
         Object.values(mgmt.classes).forEach(c => {
@@ -402,13 +412,13 @@ createApp({
           }
         })
       }
-      const hwStus = JSON.parse(localStorage.getItem('hw_students') || '[]')
+      const hwStus = safeParse(localStorage.getItem('hw_students'), [])
       hwStus.forEach(s => {
         if (!sts.find(x => x.studentId === s.id && x.name === s.name)) {
           sts.push({ studentId: s.id, name: s.name, className: (s.grade || '') + (s.class || ''), grade: s.grade || '', classNo: s.class || '' })
         }
       })
-      const roster = JSON.parse(localStorage.getItem('att_roster') || '[]')
+      const roster = safeParse(localStorage.getItem('att_roster'), [])
       roster.forEach(r => {
         if (!sts.find(x => x.studentId === r.studentId && x.name === r.studentName)) {
           sts.push({ studentId: r.studentId, name: r.studentName, className: r.className || '', grade: '', classNo: '' })
@@ -416,6 +426,8 @@ createApp({
       })
       return sts
     }
+
+    const localStudentCount = computed(() => getAllStudents().length)
 
     async function doLogin() {
       loginErr.value = ''
@@ -432,9 +444,20 @@ createApp({
         if (!ok) { loginErr.value = '密码错误，无法解密数据'; return }
         loadAttRoster()
       }
-      const sts = getAllStudents()
+      let sts = []
+      try { sts = getAllStudents() } catch (e) { console.error('获取学生列表失败:', e); loginErr.value = '读取学生数据失败，请检查数据是否损坏'; return }
+      if (sts.length === 0) { loginErr.value = '暂无学生数据，请先在教师端导入学生后再登录'; return }
       const found = sts.find(s => s.studentId === id && s.name === name)
-      if (!found) { loginErr.value = '学号或姓名不正确，请检查'; return }
+      if (!found) {
+        // 尝试模糊匹配：仅按姓名匹配，提示可用学号
+        const nameMatch = sts.filter(s => s.name === name)
+        if (nameMatch.length > 0) {
+          loginErr.value = '姓名正确但学号不匹配，该姓名对应学号为：' + nameMatch.map(s => s.studentId).join('、')
+        } else {
+          loginErr.value = '学号或姓名不正确，请检查（当前共 ' + sts.length + ' 名学生）'
+        }
+        return
+      }
       user.value = found
       loginId.value = ''; loginName.value = ''; loginPwd.value = ''
       localStorage.setItem('stu_login', JSON.stringify(found))
@@ -640,7 +663,7 @@ createApp({
 
     return {
       loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout,
-      cloudData, cloudLoading, CLOUD_GIST_ID,
+      cloudData, cloudLoading, CLOUD_GIST_ID, localStudentCount,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
@@ -648,7 +671,9 @@ createApp({
       fmtDate, fmtSize, lvlText
     }
   }
-}).mount('#app')
+})
+app.config.errorHandler = (err, instance, info) => { console.error('Vue错误:', err, info) }
+app.mount('#app')
 </script>
 </body>
 </html>
