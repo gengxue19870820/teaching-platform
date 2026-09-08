@@ -42,6 +42,10 @@
 
       <div v-if="lastSyncTime" class="sync-info">
         最近同步时间：{{ lastSyncTime }}
+        <br><span class="hint">✅ 自动同步已启用：数据变化后自动推送，每60秒检查云端更新</span>
+      </div>
+      <div v-else class="sync-info">
+        <span class="hint">✅ 自动同步已启用：数据变化后自动推送，每60秒检查云端更新</span>
       </div>
     </div>
 

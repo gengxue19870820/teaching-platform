@@ -102,8 +102,10 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import * as XLSX from 'xlsx'
 import { useWorkbench } from '../composables/useWorkbench.js'
+import { useGithubSync } from '../composables/useGithubSync.js'
 
 const { curInfo, curStudents, addBehavior } = useWorkbench()
+const { triggerAutoPush } = useGithubSync()
 
 const hostMap = { normal: '正常', abnormal: '异常', unused: '未使用' }
 const mouseMap = { normal: '正常', abnormal: '异常', unused: '未使用' }
@@ -126,11 +128,22 @@ function loadSession() {
   if (raw) {
     try {
       const s = JSON.parse(raw)
-      if (s && s.active) {
-        sessionActive.value = true
-        sessionInfo.className = s.className || ''
-        sessionInfo.startedAt = s.startedAt || ''
-        sessionInfo.startedAtStr = s.startedAtStr || ''
+      if (s && s.active && s.startedAt) {
+        // 仅接受当天的会话，过期自动失效
+        const sessionDate = new Date(s.startedAt).toDateString()
+        const today = new Date().toDateString()
+        if (sessionDate === today) {
+          sessionActive.value = true
+          sessionInfo.className = s.className || ''
+          sessionInfo.startedAt = s.startedAt || ''
+          sessionInfo.startedAtStr = s.startedAtStr || ''
+        } else {
+          // 过期会话，自动结束
+          s.active = false
+          s.endedAt = new Date().toISOString()
+          localStorage.setItem('att_session', JSON.stringify(s))
+          sessionActive.value = false
+        }
       } else {
         sessionActive.value = false
       }
@@ -160,6 +173,7 @@ function startClass() {
   // 清除上一次的考勤积分同步标记
   localStorage.removeItem('att_scores_synced')
   attSynced.value = false
+  triggerAutoPush()
 }
 
 function endClass() {
@@ -174,6 +188,7 @@ function endClass() {
     } catch { /* ignore */ }
   }
   sessionActive.value = false
+  triggerAutoPush()
 }
 
 const checkedCount = computed(() => {
@@ -202,7 +217,7 @@ function stopPolling() {
 }
 
 function loadRoster() { roster.value = JSON.parse(localStorage.getItem('att_roster') || '[]') }
-function saveRoster() { localStorage.setItem('att_roster', JSON.stringify(roster.value)) }
+function saveRoster() { localStorage.setItem('att_roster', JSON.stringify(roster.value)); triggerAutoPush() }
 function loadRecords() { records.value = JSON.parse(localStorage.getItem('att_records') || '[]') }
 
 function syncFromWorkbench() {
@@ -233,7 +248,7 @@ function clearRoster() { if (confirm('确定清空？')) { roster.value = []; sa
 
 function saveDeadline() {
   if (!deadline.value) { alert('请选择时间'); return }
-  localStorage.setItem('att_deadline', deadline.value); deadlineSaved.value = true
+  localStorage.setItem('att_deadline', deadline.value); deadlineSaved.value = true; triggerAutoPush()
 }
 function formatDL(val) { return val ? new Date(val).toLocaleString('zh-CN') : '' }
 

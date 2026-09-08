@@ -3,7 +3,7 @@ import { ref } from 'vue'
 const SYNC_KEYS = [
   'teaching_mgmt_v3',
   'hw_homework', 'hw_submissions', 'hw_students',
-  'att_roster', 'att_records', 'att_deadline'
+  'att_roster', 'att_records', 'att_deadline', 'att_session'
 ]
 
 const TOKEN_KEY = 'github_sync_token'
@@ -161,6 +161,11 @@ function extractStudentData() {
   const hwHomework = JSON.parse(localStorage.getItem('hw_homework') || '[]')
   const hwSubmissions = JSON.parse(localStorage.getItem('hw_submissions') || '[]')
   const attRecords = JSON.parse(localStorage.getItem('att_records') || '[]')
+  const attSessionRaw = localStorage.getItem('att_session')
+  let attSession = null
+  if (attSessionRaw) {
+    try { attSession = JSON.parse(attSessionRaw) } catch { /* ignore */ }
+  }
   return {
     version: 1,
     updatedAt: new Date().toISOString(),
@@ -168,7 +173,8 @@ function extractStudentData() {
     students,
     homework: hwHomework,
     submissions: hwSubmissions,
-    attRecords
+    attRecords,
+    attSession
   }
 }
 
@@ -196,6 +202,7 @@ export function useGithubSync() {
         setGistId(gist.id)
       }
       lastSyncTime.value = payload.updatedAtStr
+      localStorage.setItem('_sync_updated_at', payload.updatedAt)
       message.value = '✅ 上传成功！' + Object.keys(payload.data).length + ' 项数据已同步到 GitHub'
       return true
     } catch (e) {
@@ -216,6 +223,7 @@ export function useGithubSync() {
       const payload = await readGist(token.value, gistId.value)
       const count = restoreData(payload)
       lastSyncTime.value = payload.updatedAtStr || ''
+      if (payload.updatedAt) localStorage.setItem('_sync_updated_at', payload.updatedAt)
       message.value = '✅ 下载成功！已恢复 ' + count + ' 项数据'
       return true
     } catch (e) {
@@ -316,9 +324,83 @@ export function useGithubSync() {
     })
   }
 
+  /* ---- 自动同步 ---- */
+  let autoPushTimer = null
+  let autoPullTimer = null
+  let autoSyncRunning = false
+
+  function triggerAutoPush() {
+    if (!token.value || !gistId.value) return
+    clearTimeout(autoPushTimer)
+    autoPushTimer = setTimeout(async () => {
+      if (loading.value) return
+      loading.value = true
+      try {
+        const payload = collectData()
+        if (gistId.value) {
+          await updateGist(token.value, gistId.value, payload)
+          lastSyncTime.value = payload.updatedAtStr
+          localStorage.setItem('_sync_updated_at', payload.updatedAt)
+          console.log('[自动同步] 数据已自动推送到云端', new Date().toLocaleTimeString())
+        }
+      } catch (e) {
+        console.warn('[自动同步] 推送失败:', e.message)
+      } finally {
+        loading.value = false
+      }
+    }, 5000)
+  }
+
+  async function doAutoPull() {
+    if (!token.value || !gistId.value || loading.value) return
+    try {
+      const gist = await apiRequest('https://api.github.com/gists/' + gistId.value, 'GET', null, token.value)
+      const file = gist.files[FILE_NAME]
+      if (!file) return
+      const remote = JSON.parse(file.content)
+      const localRaw = localStorage.getItem('_sync_updated_at')
+      const localTime = localRaw ? new Date(localRaw).getTime() : 0
+      const remoteTime = remote.updatedAt ? new Date(remote.updatedAt).getTime() : 0
+      if (remoteTime > localTime + 5000) {
+        restoreData(remote)
+        localStorage.setItem('_sync_updated_at', remote.updatedAt)
+        console.log('[自动同步] 检测到云端更新，已同步到本地', new Date().toLocaleTimeString())
+        setTimeout(() => location.reload(), 800)
+      }
+    } catch (e) {
+      console.warn('[自动同步] 拉取失败:', e.message)
+    }
+  }
+
+  function startAutoSync() {
+    if (!token.value || !gistId.value || autoSyncRunning) return
+    autoSyncRunning = true
+    // 监听 localStorage 变化，自动推送
+    window._autoSyncHandler = (e) => {
+      if (SYNC_KEYS.includes(e.key)) triggerAutoPush()
+    }
+    window.addEventListener('storage', window._autoSyncHandler)
+    // 定时拉取远端更新 (60秒)
+    autoPullTimer = setInterval(doAutoPull, 60000)
+    // 首次延迟10秒后拉取
+    setTimeout(doAutoPull, 10000)
+    console.log('[自动同步] 已启动，每60秒检查云端更新')
+  }
+
+  function stopAutoSync() {
+    autoSyncRunning = false
+    clearTimeout(autoPushTimer)
+    clearInterval(autoPullTimer)
+    if (window._autoSyncHandler) {
+      window.removeEventListener('storage', window._autoSyncHandler)
+      delete window._autoSyncHandler
+    }
+  }
+
   return {
     token, gistId, publicGistId, loading, lastSyncTime, message,
     push, pull, publishStudentData, saveConfig, clearConfig,
-    exportLocal, importLocal
+    exportLocal, importLocal,
+    startAutoSync, stopAutoSync, triggerAutoPush
   }
 }

@@ -158,7 +158,10 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
     <div class="header"><h1>📚 学生学习端</h1></div>
     <div class="welcome-bar">
       <div class="info">欢迎，<strong>{{ user.name }}</strong>（学号：{{ user.studentId }}）</div>
-      <button class="logout-btn" @click="doLogout">退出登录</button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span v-if="cloudData" style="font-size:11px;color:#27ae60" title="云端数据已连接，每15秒自动刷新">☁️ 已连接</span>
+        <button class="logout-btn" @click="doLogout">退出登录</button>
+      </div>
     </div>
 
     <div class="tab-bar">
@@ -610,11 +613,41 @@ const app = createApp({
     const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
 
     function loadAttSession() {
+      // 优先从云端检测考勤会话（支持跨机器）
+      if (cloudData.value && cloudData.value.attSession) {
+        const s = cloudData.value.attSession
+        if (s && s.active && s.startedAt) {
+          const sessionDate = new Date(s.startedAt).toDateString()
+          const today = new Date().toDateString()
+          if (sessionDate === today) {
+            attSession.value = s
+            return
+          }
+        }
+      }
+      // 回退到本地 localStorage
       const raw = localStorage.getItem('att_session')
       if (raw) {
         try {
           const s = JSON.parse(raw)
-          attSession.value = (s && s.active) ? s : null
+          if (s && s.active && s.startedAt) {
+            // 仅接受当天的会话，过期自动失效
+            const sessionDate = new Date(s.startedAt).toDateString()
+            const today = new Date().toDateString()
+            if (sessionDate === today) {
+              attSession.value = s
+            } else {
+              // 过期会话，清除
+              attSession.value = null
+              try {
+                const expired = JSON.parse(raw)
+                expired.active = false
+                localStorage.setItem('att_session', JSON.stringify(expired))
+              } catch { /* ignore */ }
+            }
+          } else {
+            attSession.value = null
+          }
         } catch { attSession.value = null }
       } else {
         attSession.value = null
@@ -718,6 +751,33 @@ const app = createApp({
         if (e.key === 'att_records') loadAttRoster()
         if (e.key === 'att_roster') loadAttRoster()
       })
+      // 定期刷新云端数据 (15秒)，实现跨机器实时同步
+      if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
+        setInterval(async () => {
+          try {
+            const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')
+            if (!gid) return
+            const resp = await fetch('https://api.github.com/gists/' + gid)
+            if (!resp.ok) return
+            const gist = await resp.json()
+            const file = gist.files['student_data.json']
+            if (!file) return
+            const payload = JSON.parse(file.content)
+            if (payload.encrypted) {
+              // 已加密：仅在未缓存 payload 时更新
+              if (!cloudPayload.value) {
+                cloudEncrypted.value = true
+                cloudPayload.value = payload
+              }
+            } else if (payload.updatedAt !== cloudData.value?.updatedAt) {
+              // 未加密：数据有更新
+              cloudData.value = payload
+              loadAttRoster()
+              loadAttSession()
+            }
+          } catch (e) { /* 网络错误，静默忽略 */ }
+        }, 15000)
+      }
     })
 
     return {

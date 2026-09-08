@@ -1,4 +1,5 @@
 import { reactive, computed } from 'vue'
+import { useGithubSync } from './useGithubSync.js'
 
 const DATA_KEY = 'teaching_mgmt_v3'
 const POS_TYPES = ['专注投入', '主动探究', '合作分享', '创新实践', '帮助他人']
@@ -61,7 +62,11 @@ if (init.classes) {
 
 const state = reactive(init)
 
-function save() { localStorage.setItem(DATA_KEY, JSON.stringify(state)) }
+function save() {
+  localStorage.setItem(DATA_KEY, JSON.stringify(state))
+  // 触发自动同步到云端
+  try { useGithubSync().triggerAutoPush() } catch { /* 初始化前忽略 */ }
+}
 
 function curInfo() { return state.currentClassId ? state.classes[state.currentClassId]?.info : null }
 function curData() { return state.currentClassId ? state.classes[state.currentClassId]?.data : null }

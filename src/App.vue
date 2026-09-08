@@ -112,11 +112,13 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWorkbench } from './composables/useWorkbench.js'
+import { useGithubSync } from './composables/useGithubSync.js'
 
 const { state, curInfo, switchClass, createClass, deleteClass } = useWorkbench()
+const { token, gistId, startAutoSync, stopAutoSync } = useGithubSync()
 const router = useRouter()
 const searchQuery = ref('')
 const showClassSwitcher = ref(false)
@@ -134,6 +136,16 @@ function doDeleteClass(id) {
 function handleSearch() {
   if (searchQuery.value.trim()) router.push('/students?q=' + encodeURIComponent(searchQuery.value.trim()))
 }
+
+onMounted(() => {
+  if (token.value && gistId.value) {
+    startAutoSync()
+  }
+})
+
+onUnmounted(() => {
+  stopAutoSync()
+})
 </script>
 
 <style>
