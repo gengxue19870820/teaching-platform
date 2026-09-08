@@ -1,5 +1,30 @@
 <template>
-  <div class="app">
+  <!-- 教师登录页 -->
+  <div v-if="!isLoggedIn" class="login-page">
+    <div class="login-card">
+      <div class="login-icon">🔐</div>
+      <h1>教学管理平台</h1>
+      <p class="login-subtitle">请输入教师账号登录</p>
+      <div class="login-form">
+        <div class="login-field">
+          <label>账号</label>
+          <input v-model="loginUser" type="text" placeholder="请输入教师账号" @keyup.enter="$refs.pwdInput?.focus()" />
+        </div>
+        <div class="login-field">
+          <label>密码</label>
+          <div class="pwd-wrapper">
+            <input ref="pwdInput" v-model="loginPass" :type="showPwd ? 'text' : 'password'" placeholder="请输入密码" @keyup.enter="doLogin" />
+            <span class="pwd-toggle" @click="showPwd = !showPwd">{{ showPwd ? '🙈' : '👁️' }}</span>
+          </div>
+        </div>
+        <div v-if="loginErr" class="login-error">{{ loginErr }}</div>
+        <button class="login-btn" @click="doLogin">登 录</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主应用 -->
+  <div v-else class="app">
     <!-- 顶栏 -->
     <div class="topbar">
       <div class="logo">
@@ -17,6 +42,10 @@
       <div class="topbar-search">
         <span class="search-icon">🔍</span>
         <input type="text" v-model="searchQuery" placeholder="搜索学生…" @keyup.enter="handleSearch" />
+      </div>
+      <div class="topbar-user">
+        <span class="user-name">{{ loginUser }}</span>
+        <button class="logout-btn" @click="doLogout" title="退出登录">退出</button>
       </div>
     </div>
 
@@ -117,6 +146,12 @@ import { useRouter } from 'vue-router'
 import { useWorkbench } from './composables/useWorkbench.js'
 import { useGithubSync } from './composables/useGithubSync.js'
 
+/* ---- 教师账号认证 ---- */
+const TEACHER_ACCOUNT = 'gengxuesdnu'
+const TEACHER_PASSWORD = 'sd,123'
+const LOGIN_KEY = 'teacher_logged_in'
+const LOGIN_USER_KEY = 'teacher_logged_user'
+
 const { state, curInfo, switchClass, createClass, deleteClass } = useWorkbench()
 const { token, gistId, startAutoSync, stopAutoSync } = useGithubSync()
 const router = useRouter()
@@ -124,6 +159,41 @@ const searchQuery = ref('')
 const showClassSwitcher = ref(false)
 const newGrade = ref(1)
 const newClassNo = ref(1)
+
+// 登录状态
+const isLoggedIn = ref(false)
+const loginUser = ref('')
+const loginPass = ref('')
+const loginErr = ref('')
+const showPwd = ref(false)
+
+function doLogin() {
+  loginErr.value = ''
+  const u = loginUser.value.trim()
+  const p = loginPass.value
+  if (!u) { loginErr.value = '请输入账号'; return }
+  if (!p) { loginErr.value = '请输入密码'; return }
+  if (u !== TEACHER_ACCOUNT || p !== TEACHER_PASSWORD) {
+    loginErr.value = '账号或密码错误，请重新输入'
+    loginPass.value = ''
+    return
+  }
+  isLoggedIn.value = true
+  localStorage.setItem(LOGIN_KEY, '1')
+  localStorage.setItem(LOGIN_USER_KEY, u)
+  loginPass.value = ''
+  loginErr.value = ''
+}
+
+function doLogout() {
+  if (!confirm('确定退出登录？')) return
+  isLoggedIn.value = false
+  loginUser.value = ''
+  localStorage.removeItem(LOGIN_KEY)
+  localStorage.removeItem(LOGIN_USER_KEY)
+  stopAutoSync()
+  router.push('/')
+}
 
 function doSwitch(id) { switchClass(id); showClassSwitcher.value = false }
 function doCreate() {
@@ -138,8 +208,13 @@ function handleSearch() {
 }
 
 onMounted(() => {
-  if (token.value && gistId.value) {
-    startAutoSync()
+  // 检查是否已登录
+  if (localStorage.getItem(LOGIN_KEY) === '1') {
+    isLoggedIn.value = true
+    loginUser.value = localStorage.getItem(LOGIN_USER_KEY) || TEACHER_ACCOUNT
+    if (token.value && gistId.value) {
+      startAutoSync()
+    }
   }
 })
 
@@ -166,6 +241,25 @@ body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: var(-
 </style>
 
 <style scoped>
+/* 登录页 */
+.login-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #667eea 100%); }
+.login-card { background: #fff; border-radius: 20px; padding: 48px 40px; width: 400px; max-width: 92vw; box-shadow: 0 20px 60px rgba(0,0,0,.25); text-align: center; }
+.login-icon { font-size: 56px; margin-bottom: 8px; }
+.login-card h1 { font-size: 24px; color: #1e3c72; margin-bottom: 4px; }
+.login-subtitle { color: #888; font-size: 14px; margin-bottom: 28px; }
+.login-form { text-align: left; }
+.login-field { margin-bottom: 18px; }
+.login-field label { display: block; font-size: 13px; font-weight: 600; color: #333; margin-bottom: 6px; }
+.login-field input { width: 100%; padding: 11px 14px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 15px; box-sizing: border-box; transition: border-color .2s; }
+.login-field input:focus { outline: none; border-color: #1e88e5; }
+.pwd-wrapper { position: relative; display: flex; align-items: center; }
+.pwd-wrapper input { padding-right: 42px; }
+.pwd-toggle { position: absolute; right: 12px; cursor: pointer; font-size: 18px; user-select: none; opacity: .6; }
+.pwd-toggle:hover { opacity: 1; }
+.login-error { color: #e74c3c; font-size: 13px; margin-bottom: 12px; background: #fde8e8; padding: 8px 12px; border-radius: 8px; text-align: center; }
+.login-btn { width: 100%; padding: 13px; background: linear-gradient(135deg, #1e3c72, #2a5298); color: #fff; border: none; border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 4px; transition: opacity .2s; }
+.login-btn:hover { opacity: .9; }
+
 .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .topbar { height: 56px; background: var(--bg-card); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; box-shadow: var(--shadow); z-index: 100; }
 .logo { font-size: 17px; font-weight: 700; color: var(--primary); white-space: nowrap; display: flex; align-items: center; gap: 6px; }
@@ -180,6 +274,10 @@ body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: var(-
 .topbar-search { position: relative; display: flex; align-items: center; }
 .topbar-search input { width: 200px; height: 32px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 10px 0 30px; background: var(--bg-page); }
 .search-icon { position: absolute; left: 8px; font-size: 14px; }
+.topbar-user { display: flex; align-items: center; gap: 8px; margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--border); }
+.user-name { font-size: 13px; color: var(--text-secondary); font-weight: 600; }
+.logout-btn { padding: 4px 12px; background: var(--red); color: #fff; border: none; border-radius: var(--radius-sm); font-size: 12px; cursor: pointer; font-weight: 600; transition: opacity .15s; }
+.logout-btn:hover { opacity: .85; }
 
 .main-body { display: flex; flex: 1; overflow: hidden; }
 .sidebar { width: 210px; background: var(--bg-sidebar); border-right: 1px solid var(--border); overflow-y: auto; flex-shrink: 0; padding: 8px 0; }
