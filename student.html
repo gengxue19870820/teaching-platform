@@ -147,9 +147,10 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <button class="btn-login" @click="doLogin">登 录</button>
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
       <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
-      <p v-if="!cloudLoading && !cloudData && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
+      <p v-if="!cloudLoading && cloudError" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ {{ cloudError }}</p>
+      <p v-if="!cloudLoading && !cloudData && !cloudError && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
       <p v-if="!cloudLoading && cloudEncrypted && !cloudData" style="text-align:center;color:#667eea;margin-top:10px;font-size:12px;background:#eef2ff;padding:8px 12px;border-radius:8px">☁️ 云端数据已加载（加密），请输入班级密码后登录</p>
-      <p v-if="!cloudLoading && !cloudEncrypted && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
+      <p v-if="!cloudLoading && !cloudEncrypted && !cloudError && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
       <p v-if="!cloudLoading && !cloudEncrypted && localStudentCount > 0" style="text-align:center;color:#27ae60;margin-top:10px;font-size:12px">✅ 已检测到 {{ localStudentCount }} 名学生数据</p>
     </div>
   </div>
@@ -342,6 +343,7 @@ const app = createApp({
     const cloudLoading = ref(false)
     const cloudEncrypted = ref(false) // 云端数据是否已加密
     const cloudPayload = ref(null) // 加密的原始数据
+    const cloudError = ref('') // 云端数据获取错误信息
 
     /* ---- AES 解密 (Web Crypto API) ---- */
     function b642buf(b64) { return Uint8Array.from(atob(b64), c => c.charCodeAt(0)) }
@@ -367,13 +369,24 @@ const app = createApp({
     /* 从公开 Gist 获取云端数据（可能已加密） */
     async function fetchCloudData() {
       const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
-      if (!gid) return null
+      if (!gid) {
+        cloudError.value = '未配置 Gist ID'
+        return null
+      }
       try {
+        cloudLoading.value = true
+        cloudError.value = ''
         const resp = await fetch('https://api.github.com/gists/' + gid)
-        if (!resp.ok) return null
+        if (!resp.ok) {
+          cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')'
+          return null
+        }
         const gist = await resp.json()
         const file = gist.files['student_data.json']
-        if (!file) return null
+        if (!file) {
+          cloudError.value = '云端未找到学生数据文件'
+          return null
+        }
         const payload = JSON.parse(file.content)
         localStorage.setItem('stu_cloud_gist_id', gid)
         if (payload.encrypted) {
@@ -387,8 +400,11 @@ const app = createApp({
           return payload
         }
       } catch (e) {
+        cloudError.value = '云端数据获取异常: ' + e.message
         console.warn('云端数据获取失败:', e)
         return null
+      } finally {
+        cloudLoading.value = false
       }
     }
 
@@ -783,7 +799,7 @@ const app = createApp({
 
     return {
       loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout,
-      cloudData, cloudLoading, CLOUD_GIST_ID, localStudentCount,
+      cloudData, cloudLoading, cloudEncrypted, cloudError, CLOUD_GIST_ID, localStudentCount,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
