@@ -148,8 +148,9 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
       <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
       <p v-if="!cloudLoading && !cloudData && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
-      <p v-if="!cloudLoading && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
-      <p v-if="!cloudLoading && localStudentCount > 0" style="text-align:center;color:#27ae60;margin-top:10px;font-size:12px">✅ 已检测到 {{ localStudentCount }} 名学生数据</p>
+      <p v-if="!cloudLoading && cloudEncrypted && !cloudData" style="text-align:center;color:#667eea;margin-top:10px;font-size:12px;background:#eef2ff;padding:8px 12px;border-radius:8px">☁️ 云端数据已加载（加密），请输入班级密码后登录</p>
+      <p v-if="!cloudLoading && !cloudEncrypted && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
+      <p v-if="!cloudLoading && !cloudEncrypted && localStudentCount > 0" style="text-align:center;color:#27ae60;margin-top:10px;font-size:12px">✅ 已检测到 {{ localStudentCount }} 名学生数据</p>
     </div>
   </div>
 
