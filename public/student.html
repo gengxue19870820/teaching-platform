@@ -366,19 +366,53 @@ const app = createApp({
       return JSON.parse(new TextDecoder().decode(decrypted))
     }
 
-    /* 从公开 Gist 获取云端数据（可能已加密） */
+    /* 从公开 Gist 获取云端数据（可能已加密），带本地缓存 */
+    const CACHE_KEY = 'stu_cloud_cache'
+    const CACHE_TIME_KEY = 'stu_cloud_cache_time'
+    const CACHE_MAX_AGE = 5 * 60 * 1000 // 5分钟缓存
+
     async function fetchCloudData() {
       const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
       if (!gid) {
         cloudError.value = '未配置 Gist ID'
         return null
       }
+      // 先尝试使用本地缓存
+      try {
+        const cached = localStorage.getItem(CACHE_KEY)
+        const cachedTime = parseInt(localStorage.getItem(CACHE_TIME_KEY) || '0')
+        if (cached && (Date.now() - cachedTime < CACHE_MAX_AGE)) {
+          const payload = JSON.parse(cached)
+          if (payload.encrypted) {
+            cloudEncrypted.value = true
+            cloudPayload.value = payload
+          } else {
+            cloudData.value = payload
+          }
+          cloudError.value = ''
+          return payload
+        }
+      } catch (e) { /* 缓存读取失败，继续尝试网络 */ }
+
       try {
         cloudLoading.value = true
         cloudError.value = ''
         const resp = await fetch('https://api.github.com/gists/' + gid)
         if (!resp.ok) {
-          cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')'
+          // 网络失败时尝试使用过期缓存
+          const cached = localStorage.getItem(CACHE_KEY)
+          if (cached) {
+            const payload = JSON.parse(cached)
+            if (payload.encrypted) {
+              cloudEncrypted.value = true
+              cloudPayload.value = payload
+            } else {
+              cloudData.value = payload
+            }
+            cloudError.value = '⚠️ 云端连接失败(HTTP ' + resp.status + ')，已使用本地缓存数据'
+            return payload
+          }
+          cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')，请检查网络连接'
           return null
         }
         const gist = await resp.json()
@@ -389,17 +423,33 @@ const app = createApp({
         }
         const payload = JSON.parse(file.content)
         localStorage.setItem('stu_cloud_gist_id', gid)
+        // 缓存数据
+        localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
+        localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
         if (payload.encrypted) {
-          // 数据已加密，保存密文等待用户输入密码
           cloudEncrypted.value = true
           cloudPayload.value = payload
           return null
         } else {
-          // 未加密，直接使用
           cloudData.value = payload
           return payload
         }
       } catch (e) {
+        // 异常时也尝试使用缓存
+        const cached = localStorage.getItem(CACHE_KEY)
+        if (cached) {
+          try {
+            const payload = JSON.parse(cached)
+            if (payload.encrypted) {
+              cloudEncrypted.value = true
+              cloudPayload.value = payload
+            } else {
+              cloudData.value = payload
+            }
+            cloudError.value = '⚠️ 网络异常，已使用本地缓存数据'
+            return payload
+          } catch (e2) { /* ignore */ }
+        }
         cloudError.value = '云端数据获取异常: ' + e.message
         console.warn('云端数据获取失败:', e)
         return null
@@ -768,32 +818,19 @@ const app = createApp({
         if (e.key === 'att_records') loadAttRoster()
         if (e.key === 'att_roster') loadAttRoster()
       })
-      // 定期刷新云端数据 (15秒)，实现跨机器实时同步
+      // 定期刷新云端数据 (2分钟)，使用缓存避免 API 限流
       if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
         setInterval(async () => {
           try {
-            const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')
-            if (!gid) return
-            const resp = await fetch('https://api.github.com/gists/' + gid)
-            if (!resp.ok) return
-            const gist = await resp.json()
-            const file = gist.files['student_data.json']
-            if (!file) return
-            const payload = JSON.parse(file.content)
-            if (payload.encrypted) {
-              // 已加密：仅在未缓存 payload 时更新
-              if (!cloudPayload.value) {
-                cloudEncrypted.value = true
-                cloudPayload.value = payload
-              }
-            } else if (payload.updatedAt !== cloudData.value?.updatedAt) {
-              // 未加密：数据有更新
-              cloudData.value = payload
+            const oldData = cloudData.value
+            await fetchCloudData()
+            // 如果数据有更新，重新加载花名册和考勤会话
+            if (cloudData.value && cloudData.value !== oldData) {
               loadAttRoster()
               loadAttSession()
             }
           } catch (e) { /* 网络错误，静默忽略 */ }
-        }, 15000)
+        }, 2 * 60 * 1000)
       }
     })
 
