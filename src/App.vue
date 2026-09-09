@@ -4,18 +4,21 @@
     <div class="login-card">
       <div class="login-icon">🔐</div>
       <h1>教学管理平台</h1>
-      <p class="login-subtitle">请输入教师账号登录</p>
+      <p class="login-subtitle">请使用账号密码登录</p>
       <div class="login-form">
         <div class="login-field">
           <label>账号</label>
-          <input v-model="loginUser" type="text" placeholder="请输入教师账号" @keyup.enter="$refs.pwdInput?.focus()" />
+          <input v-model="loginAccount" type="text" placeholder="请输入账号" @keyup.enter="doLogin" />
         </div>
         <div class="login-field">
           <label>密码</label>
           <div class="pwd-wrapper">
-            <input ref="pwdInput" v-model="loginPass" :type="showPwd ? 'text' : 'password'" placeholder="请输入密码" @keyup.enter="doLogin" />
-            <span class="pwd-toggle" @click="showPwd = !showPwd">{{ showPwd ? '🙈' : '👁️' }}</span>
+            <input v-model="loginPassword" :type="showPassword ? 'text' : 'password'" placeholder="请输入密码" @keyup.enter="doLogin" />
+            <span class="pwd-toggle" @click="showPassword = !showPassword">{{ showPassword ? '🙈' : '👁️' }}</span>
           </div>
+        </div>
+        <div class="login-remember">
+          <label class="checkbox-label"><input type="checkbox" v-model="rememberMe" /> 记住密码</label>
         </div>
         <div v-if="loginErr" class="login-error">{{ loginErr }}</div>
         <button class="login-btn" @click="doLogin">登 录</button>
@@ -146,7 +149,7 @@ import { useRouter } from 'vue-router'
 import { useWorkbench } from './composables/useWorkbench.js'
 import { useGithubSync } from './composables/useGithubSync.js'
 
-/* ---- 教师账号认证 ---- */
+/* ---- 教师账号认证（固定账号+密码） ---- */
 const TEACHER_ACCOUNT = 'gengxuesdnu'
 const TEACHER_PASSWORD = 'sd,123'
 const LOGIN_KEY = 'teacher_logged_in'
@@ -160,28 +163,38 @@ const showClassSwitcher = ref(false)
 const newGrade = ref(1)
 const newClassNo = ref(1)
 
+const REMEMBER_KEY = 'teacher_remember_account'
+const rememberMe = ref(false)
+
 // 登录状态
 const isLoggedIn = ref(false)
 const loginUser = ref('')
-const loginPass = ref('')
+const loginAccount = ref('')
+const loginPassword = ref('')
 const loginErr = ref('')
-const showPwd = ref(false)
+const showPassword = ref(false)
 
 function doLogin() {
   loginErr.value = ''
-  const u = loginUser.value.trim()
-  const p = loginPass.value
-  if (!u) { loginErr.value = '请输入账号'; return }
-  if (!p) { loginErr.value = '请输入密码'; return }
-  if (u !== TEACHER_ACCOUNT || p !== TEACHER_PASSWORD) {
-    loginErr.value = '账号或密码错误，请重新输入'
-    loginPass.value = ''
+  const account = loginAccount.value.trim()
+  const password = loginPassword.value.trim()
+  if (!account) { loginErr.value = '请输入账号'; return }
+  if (!password) { loginErr.value = '请输入密码'; return }
+  if (account !== TEACHER_ACCOUNT || password !== TEACHER_PASSWORD) {
+    loginErr.value = '账号或密码错误'
+    loginPassword.value = ''
     return
   }
   isLoggedIn.value = true
   localStorage.setItem(LOGIN_KEY, '1')
-  localStorage.setItem(LOGIN_USER_KEY, u)
-  loginPass.value = ''
+  localStorage.setItem(LOGIN_USER_KEY, account)
+  // 记住密码
+  if (rememberMe.value) {
+    localStorage.setItem(REMEMBER_KEY, account)
+  } else {
+    localStorage.removeItem(REMEMBER_KEY)
+  }
+  loginPassword.value = ''
   loginErr.value = ''
 }
 
@@ -189,6 +202,7 @@ function doLogout() {
   if (!confirm('确定退出登录？')) return
   isLoggedIn.value = false
   loginUser.value = ''
+  loginAccount.value = ''
   localStorage.removeItem(LOGIN_KEY)
   localStorage.removeItem(LOGIN_USER_KEY)
   stopAutoSync()
@@ -208,6 +222,12 @@ function handleSearch() {
 }
 
 onMounted(() => {
+  // 恢复记住的账号
+  const savedAccount = localStorage.getItem(REMEMBER_KEY)
+  if (savedAccount) {
+    loginAccount.value = savedAccount
+    rememberMe.value = true
+  }
   // 检查是否已登录
   if (localStorage.getItem(LOGIN_KEY) === '1') {
     isLoggedIn.value = true
@@ -257,8 +277,18 @@ body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: var(-
 .pwd-toggle { position: absolute; right: 12px; cursor: pointer; font-size: 18px; user-select: none; opacity: .6; }
 .pwd-toggle:hover { opacity: 1; }
 .login-error { color: #e74c3c; font-size: 13px; margin-bottom: 12px; background: #fde8e8; padding: 8px 12px; border-radius: 8px; text-align: center; }
+.login-remember { margin-bottom: 14px; }
+.checkbox-label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #555; cursor: pointer; user-select: none; }
+.checkbox-label input[type="checkbox"] { width: 16px; height: 16px; accent-color: #1e88e5; cursor: pointer; }
 .login-btn { width: 100%; padding: 13px; background: linear-gradient(135deg, #1e3c72, #2a5298); color: #fff; border: none; border-radius: 10px; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 4px; transition: opacity .2s; }
 .login-btn:hover { opacity: .9; }
+.code-wrapper { display: flex; gap: 8px; align-items: center; }
+.code-wrapper input { flex: 1; padding: 11px 14px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 15px; box-sizing: border-box; transition: border-color .2s; }
+.code-wrapper input:focus { outline: none; border-color: #1e88e5; }
+.code-btn { padding: 11px 14px; background: linear-gradient(135deg, #1e88e5, #42a5f5); color: #fff; border: none; border-radius: 10px; font-size: 13px; cursor: pointer; white-space: nowrap; transition: opacity .2s; flex-shrink: 0; }
+.code-btn:disabled { background: #bbb; cursor: not-allowed; opacity: .7; }
+.code-btn:not(:disabled):hover { opacity: .9; }
+.sim-code { margin-top: 16px; font-size: 13px; color: #f39c12; background: #fef9e7; padding: 8px 12px; border-radius: 8px; text-align: center; }
 
 .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .topbar { height: 56px; background: var(--bg-card); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 12px; flex-shrink: 0; box-shadow: var(--shadow); z-index: 100; }
