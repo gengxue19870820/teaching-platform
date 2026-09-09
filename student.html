@@ -148,6 +148,8 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
       <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
       <p v-if="!cloudLoading && !cloudData && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
+      <p v-if="!cloudLoading && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
+      <p v-if="!cloudLoading && localStudentCount > 0" style="text-align:center;color:#27ae60;margin-top:10px;font-size:12px">✅ 已检测到 {{ localStudentCount }} 名学生数据</p>
     </div>
   </div>
 
@@ -156,7 +158,10 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
     <div class="header"><h1>📚 学生学习端</h1></div>
     <div class="welcome-bar">
       <div class="info">欢迎，<strong>{{ user.name }}</strong>（学号：{{ user.studentId }}）</div>
-      <button class="logout-btn" @click="doLogout">退出登录</button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span v-if="cloudData" style="font-size:11px;color:#27ae60" title="云端数据已连接，每15秒自动刷新">☁️ 已连接</span>
+        <button class="logout-btn" @click="doLogout">退出登录</button>
+      </div>
     </div>
 
     <div class="tab-bar">
@@ -215,7 +220,18 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
 
       <!-- 考勤登记 -->
       <div v-if="tab==='attendance'">
-        <div v-if="!attRoster.length" style="text-align:center;padding:40px">
+        <div v-if="!attSessionActive" style="text-align:center;padding:40px">
+          <div style="font-size:48px;margin-bottom:12px">⏳</div>
+          <h2 style="color:#f39c12;margin-bottom:12px">教师尚未开始上课</h2>
+          <p style="color:#888">请等待教师点击「开始上课」后再进行考勤登记</p>
+          <button class="btn-continue" @click="refreshSession" style="margin-top:16px">🔄 刷新状态</button>
+        </div>
+        <div v-else-if="!attInRoster" style="text-align:center;padding:40px">
+          <div style="font-size:48px;margin-bottom:12px">⚠️</div>
+          <h2 style="color:#e74c3c;margin-bottom:12px">你不在考勤花名册中</h2>
+          <p style="color:#888">请联系教师将你加入考勤花名册后再登记</p>
+        </div>
+        <div v-else-if="!attRoster.length" style="text-align:center;padding:40px">
           <div style="font-size:48px;margin-bottom:12px">⚠️</div>
           <h2 style="color:#f39c12;margin-bottom:12px">暂无考勤名单</h2>
           <p style="color:#888">教师尚未导入考勤花名册，请联系教师先完成导入。</p>
@@ -295,8 +311,11 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+<script src="/teaching-platform/vue.global.prod.js"></script>
 <script>
+if (typeof Vue === 'undefined') {
+  document.write('<script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"><\/script>')
+}
 if (typeof Vue === 'undefined') {
   document.write('<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"><\/script>')
 }
@@ -310,7 +329,7 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 const CLOUD_GIST_ID = '' // 例如: 'abc123def456'
 /* ======================== */
 
-createApp({
+const app = createApp({
   setup() {
     const loginId = ref('')
     const loginName = ref('')
@@ -385,13 +404,18 @@ createApp({
       }
     }
 
+    function safeParse(json, fallback) {
+      if (json == null) return fallback
+      try { return JSON.parse(json) } catch { return fallback }
+    }
+
     function getAllStudents() {
       // 优先使用云端数据
       if (cloudData.value && cloudData.value.students) {
         return cloudData.value.students
       }
       // 回退到本地 localStorage
-      const mgmt = JSON.parse(localStorage.getItem('teaching_mgmt_v3') || '{}')
+      const mgmt = safeParse(localStorage.getItem('teaching_mgmt_v3'), {})
       const sts = []
       if (mgmt.classes) {
         Object.values(mgmt.classes).forEach(c => {
@@ -402,13 +426,13 @@ createApp({
           }
         })
       }
-      const hwStus = JSON.parse(localStorage.getItem('hw_students') || '[]')
+      const hwStus = safeParse(localStorage.getItem('hw_students'), [])
       hwStus.forEach(s => {
         if (!sts.find(x => x.studentId === s.id && x.name === s.name)) {
           sts.push({ studentId: s.id, name: s.name, className: (s.grade || '') + (s.class || ''), grade: s.grade || '', classNo: s.class || '' })
         }
       })
-      const roster = JSON.parse(localStorage.getItem('att_roster') || '[]')
+      const roster = safeParse(localStorage.getItem('att_roster'), [])
       roster.forEach(r => {
         if (!sts.find(x => x.studentId === r.studentId && x.name === r.studentName)) {
           sts.push({ studentId: r.studentId, name: r.studentName, className: r.className || '', grade: '', classNo: '' })
@@ -416,6 +440,8 @@ createApp({
       })
       return sts
     }
+
+    const localStudentCount = computed(() => getAllStudents().length)
 
     async function doLogin() {
       loginErr.value = ''
@@ -432,9 +458,20 @@ createApp({
         if (!ok) { loginErr.value = '密码错误，无法解密数据'; return }
         loadAttRoster()
       }
-      const sts = getAllStudents()
+      let sts = []
+      try { sts = getAllStudents() } catch (e) { console.error('获取学生列表失败:', e); loginErr.value = '读取学生数据失败，请检查数据是否损坏'; return }
+      if (sts.length === 0) { loginErr.value = '暂无学生数据，请先在教师端导入学生后再登录'; return }
       const found = sts.find(s => s.studentId === id && s.name === name)
-      if (!found) { loginErr.value = '学号或姓名不正确，请检查'; return }
+      if (!found) {
+        // 尝试模糊匹配：仅按姓名匹配，提示可用学号
+        const nameMatch = sts.filter(s => s.name === name)
+        if (nameMatch.length > 0) {
+          loginErr.value = '姓名正确但学号不匹配，该姓名对应学号为：' + nameMatch.map(s => s.studentId).join('、')
+        } else {
+          loginErr.value = '学号或姓名不正确，请检查（当前共 ' + sts.length + ' 名学生）'
+        }
+        return
+      }
       user.value = found
       loginId.value = ''; loginName.value = ''; loginPwd.value = ''
       localStorage.setItem('stu_login', JSON.stringify(found))
@@ -570,41 +607,112 @@ createApp({
     const attForm = reactive({ machineNo: '', hostUsage: '', mouseUsage: '', hygiene: '', remark: '' })
     const attSubmitted = ref(false)
     const attSubmitTime = ref('')
+    const attSession = ref(null) // 当前考勤会话
     const hostOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
+
+    function loadAttSession() {
+      // 优先从云端检测考勤会话（支持跨机器）
+      if (cloudData.value && cloudData.value.attSession) {
+        const s = cloudData.value.attSession
+        if (s && s.active && s.startedAt) {
+          const sessionDate = new Date(s.startedAt).toDateString()
+          const today = new Date().toDateString()
+          if (sessionDate === today) {
+            attSession.value = s
+            return
+          }
+        }
+      }
+      // 回退到本地 localStorage
+      const raw = localStorage.getItem('att_session')
+      if (raw) {
+        try {
+          const s = JSON.parse(raw)
+          if (s && s.active && s.startedAt) {
+            // 仅接受当天的会话，过期自动失效
+            const sessionDate = new Date(s.startedAt).toDateString()
+            const today = new Date().toDateString()
+            if (sessionDate === today) {
+              attSession.value = s
+            } else {
+              // 过期会话，清除
+              attSession.value = null
+              try {
+                const expired = JSON.parse(raw)
+                expired.active = false
+                localStorage.setItem('att_session', JSON.stringify(expired))
+              } catch { /* ignore */ }
+            }
+          } else {
+            attSession.value = null
+          }
+        } catch { attSession.value = null }
+      } else {
+        attSession.value = null
+      }
+    }
+    function refreshSession() { loadAttSession() }
+
+    const attSessionActive = computed(() => {
+      return !!attSession.value && attSession.value.active === true
+    })
+
+    const attInRoster = computed(() => {
+      if (!user.value || !attSessionActive.value) return false
+      return attRoster.value.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
+    })
+
     function loadAttRoster() {
       if (cloudData.value && cloudData.value.attRecords) {
         attRoster.value = cloudData.value.students ? cloudData.value.students.map(s => ({ studentId: s.studentId, studentName: s.name, className: s.className })) : []
       } else {
-        attRoster.value = JSON.parse(localStorage.getItem('att_roster') || '[]')
+        attRoster.value = safeParse(localStorage.getItem('att_roster'), [])
       }
     }
 
-    // 检查当前学生是否已提交过考勤（以学号为关键，每次上课只能提交1次）
+    // 检查当前学生是否已在本次会话中提交过考勤
     const attAlreadySubmitted = computed(() => {
-      if (!user.value) return false
-      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
-      return records.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
+      if (!user.value || !attSessionActive.value) return false
+      const records = safeParse(localStorage.getItem('att_records'), [])
+      const sessionStart = attSession.value.startedAt
+      return records.some(r =>
+        r.studentId === user.value.studentId &&
+        r.className === user.value.className &&
+        new Date(r.submitTime).getTime() >= new Date(sessionStart).getTime()
+      )
     })
     const attExistingTime = computed(() => {
-      if (!user.value) return ''
-      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
-      const rec = records.find(r => r.studentId === user.value.studentId && r.className === user.value.className)
+      if (!user.value || !attSessionActive.value) return ''
+      const records = safeParse(localStorage.getItem('att_records'), [])
+      const sessionStart = attSession.value.startedAt
+      const rec = records.find(r =>
+        r.studentId === user.value.studentId &&
+        r.className === user.value.className &&
+        new Date(r.submitTime).getTime() >= new Date(sessionStart).getTime()
+      )
       return rec ? rec.submitTimeStr : ''
     })
 
     function submitAtt() {
-      // 防重复提交：检查该学号是否已登记过
-      const records = JSON.parse(localStorage.getItem('att_records') || '[]')
-      const already = records.some(r => r.studentId === user.value.studentId && r.className === user.value.className)
-      if (already) { alert('你已提交过考勤登记，每位同学每次上课只能提交1次！'); return }
+      if (!attSessionActive.value) { alert('教师尚未开始上课，无法登记'); return }
+      if (!attInRoster.value) { alert('你不在考勤花名册中，请联系教师'); return }
+      // 防重复提交：检查该学号在本次会话中是否已登记过
+      const records = safeParse(localStorage.getItem('att_records'), [])
+      const sessionStart = attSession.value.startedAt
+      const already = records.some(r =>
+        r.studentId === user.value.studentId &&
+        r.className === user.value.className &&
+        new Date(r.submitTime).getTime() >= new Date(sessionStart).getTime()
+      )
+      if (already) { alert('你已提交过本次考勤登记，每位同学每次上课只能提交1次！'); return }
       if (!attForm.machineNo) { alert('请填写机器号'); return }
       if (!attForm.hostUsage) { alert('请选择主机使用情况'); return }
       if (!attForm.mouseUsage) { alert('请选择鼠标使用情况'); return }
       if (!attForm.hygiene) { alert('请选择卫生情况'); return }
       const now = new Date()
-      const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), id: Date.now().toString() }
+      const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), sessionId: attSession.value.startedAt, id: Date.now().toString() }
       records.push(record)
       localStorage.setItem('att_records', JSON.stringify(records))
       attSubmitTime.value = now.toLocaleString('zh-CN')
@@ -636,19 +744,56 @@ createApp({
       await fetchCloudData()
       cloudLoading.value = false
       loadAttRoster()
+      loadAttSession()
+      // 监听 localStorage 变化（教师端开始/结束上课、新考勤记录等）
+      window.addEventListener('storage', function(e) {
+        if (e.key === 'att_session') loadAttSession()
+        if (e.key === 'att_records') loadAttRoster()
+        if (e.key === 'att_roster') loadAttRoster()
+      })
+      // 定期刷新云端数据 (15秒)，实现跨机器实时同步
+      if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
+        setInterval(async () => {
+          try {
+            const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')
+            if (!gid) return
+            const resp = await fetch('https://api.github.com/gists/' + gid)
+            if (!resp.ok) return
+            const gist = await resp.json()
+            const file = gist.files['student_data.json']
+            if (!file) return
+            const payload = JSON.parse(file.content)
+            if (payload.encrypted) {
+              // 已加密：仅在未缓存 payload 时更新
+              if (!cloudPayload.value) {
+                cloudEncrypted.value = true
+                cloudPayload.value = payload
+              }
+            } else if (payload.updatedAt !== cloudData.value?.updatedAt) {
+              // 未加密：数据有更新
+              cloudData.value = payload
+              loadAttRoster()
+              loadAttSession()
+            }
+          } catch (e) { /* 网络错误，静默忽略 */ }
+        }, 15000)
+      }
     })
 
     return {
       loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout,
-      cloudData, cloudLoading, CLOUD_GIST_ID,
+      cloudData, cloudLoading, CLOUD_GIST_ID, localStudentCount,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
       attRoster, attForm, attSubmitted, attSubmitTime, attAlreadySubmitted, attExistingTime, hostOpts, mouseOpts, hygOpts, submitAtt, resetAtt,
+      attSession, attSessionActive, attInRoster, refreshSession,
       fmtDate, fmtSize, lvlText
     }
   }
-}).mount('#app')
+})
+app.config.errorHandler = (err, instance, info) => { console.error('Vue错误:', err, info) }
+app.mount('#app')
 </script>
 </body>
 </html>
