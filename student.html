@@ -366,10 +366,15 @@ const app = createApp({
       return JSON.parse(new TextDecoder().decode(decrypted))
     }
 
-    /* 从公开 Gist 获取云端数据（可能已加密），带本地缓存 */
+    /* 从公开 Gist 获取云端数据（可能已加密），带本地缓存 + ETag 条件请求 */
     const CACHE_KEY = 'stu_cloud_cache'
     const CACHE_TIME_KEY = 'stu_cloud_cache_time'
-    const CACHE_MAX_AGE = 60 * 1000 // 1分钟缓存
+    const ETAG_KEY = 'stu_cloud_etag'
+    const CACHE_MAX_AGE = 90 * 1000 // 90秒本地缓存
+
+    /* 统一获取 Gist 全部数据（一次 API 调用获取所有文件） */
+    let _lastFetchTime = 0
+    const MIN_FETCH_INTERVAL = 30 * 1000 // 最少30秒才发一次 API 请求
 
     async function fetchCloudData(forceRefresh) {
       const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
@@ -377,87 +382,107 @@ const app = createApp({
         cloudError.value = '未配置 Gist ID'
         return null
       }
-      // 先尝试使用本地缓存（强制刷新时跳过）
+      // 本地缓存检查（强制刷新时跳过）
       if (!forceRefresh) {
         try {
           const cached = localStorage.getItem(CACHE_KEY)
           const cachedTime = parseInt(localStorage.getItem(CACHE_TIME_KEY) || '0')
           if (cached && (Date.now() - cachedTime < CACHE_MAX_AGE)) {
             const payload = JSON.parse(cached)
-            if (payload.encrypted) {
-              cloudEncrypted.value = true
-              cloudPayload.value = payload
-            } else {
-              cloudData.value = payload
-            }
-            cloudError.value = ''
+            _applyCloudPayload(payload)
             return payload
           }
-        } catch (e) { /* 缓存读取失败，继续尝试网络 */ }
+        } catch (e) { /* 缓存读取失败，继续网络请求 */ }
+      }
+      // 防 API 限流：距上次请求不足 MIN_FETCH_INTERVAL 时使用缓存
+      if (!forceRefresh && (Date.now() - _lastFetchTime < MIN_FETCH_INTERVAL)) {
+        try {
+          const cached = localStorage.getItem(CACHE_KEY)
+          if (cached) { const p = JSON.parse(cached); _applyCloudPayload(p); return p }
+        } catch (e) { /* ignore */ }
       }
 
       try {
         cloudLoading.value = true
         cloudError.value = ''
-        const resp = await fetch('https://api.github.com/gists/' + gid)
+        // 使用 ETag 条件请求：数据未变时返回 304，不消耗 API 配额
+        const headers = {}
+        const savedEtag = localStorage.getItem(ETAG_KEY)
+        if (savedEtag && !forceRefresh) headers['If-None-Match'] = savedEtag
+        const resp = await fetch('https://api.github.com/gists/' + gid, { headers })
+        _lastFetchTime = Date.now()
+        // 304 Not Modified：数据未变，使用缓存
+        if (resp.status === 304) {
+          localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
+          try {
+            const cached = localStorage.getItem(CACHE_KEY)
+            if (cached) { const p = JSON.parse(cached); _applyCloudPayload(p); return p }
+          } catch (e) { /* ignore */ }
+          return null
+        }
         if (!resp.ok) {
-          // 网络失败时尝试使用过期缓存
           const cached = localStorage.getItem(CACHE_KEY)
           if (cached) {
             const payload = JSON.parse(cached)
-            if (payload.encrypted) {
-              cloudEncrypted.value = true
-              cloudPayload.value = payload
-            } else {
-              cloudData.value = payload
-            }
-            cloudError.value = '⚠️ 云端连接失败(HTTP ' + resp.status + ')，已使用本地缓存数据'
+            _applyCloudPayload(payload)
+            cloudError.value = '⚠️ 云端连接失败(HTTP ' + resp.status + ')，已使用本地缓存'
             return payload
           }
-          cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')，请检查网络连接'
+          cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')'
           return null
         }
+        // 保存 ETag
+        const newEtag = resp.headers.get('ETag')
+        if (newEtag) localStorage.setItem(ETAG_KEY, newEtag)
         const gist = await resp.json()
-        const file = gist.files['student_data.json']
-        if (!file) {
+        // 解析学生数据
+        const studentFile = gist.files['student_data.json']
+        if (studentFile) {
+          const payload = JSON.parse(studentFile.content)
+          localStorage.setItem('stu_cloud_gist_id', gid)
+          localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
+          localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
+          // 同时保存考勤会话（从同一 Gist 响应中提取）
+          const attFile = gist.files['att_session.json']
+          if (attFile) {
+            try {
+              const attData = JSON.parse(attFile.content)
+              if (attData.attSession) localStorage.setItem('_cloud_att_session', JSON.stringify(attData.attSession))
+            } catch (e) { /* ignore */ }
+          }
+          _applyCloudPayload(payload)
+          return payload
+        } else {
           cloudError.value = '云端未找到学生数据文件'
           return null
         }
-        const payload = JSON.parse(file.content)
-        localStorage.setItem('stu_cloud_gist_id', gid)
-        // 缓存数据
-        localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
-        localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
-        if (payload.encrypted) {
-          cloudEncrypted.value = true
-          cloudPayload.value = payload
-          return null
-        } else {
-          cloudData.value = payload
-          return payload
-        }
       } catch (e) {
-        // 异常时也尝试使用缓存
         const cached = localStorage.getItem(CACHE_KEY)
         if (cached) {
           try {
             const payload = JSON.parse(cached)
-            if (payload.encrypted) {
-              cloudEncrypted.value = true
-              cloudPayload.value = payload
-            } else {
-              cloudData.value = payload
-            }
-            cloudError.value = '⚠️ 网络异常，已使用本地缓存数据'
+            _applyCloudPayload(payload)
+            cloudError.value = '⚠️ 网络异常，已使用本地缓存'
             return payload
           } catch (e2) { /* ignore */ }
         }
         cloudError.value = '云端数据获取异常: ' + e.message
-        console.warn('云端数据获取失败:', e)
         return null
       } finally {
         cloudLoading.value = false
       }
+    }
+
+    /* 应用云端数据到响应式状态 */
+    function _applyCloudPayload(payload) {
+      if (!payload) return
+      if (payload.encrypted) {
+        cloudEncrypted.value = true
+        cloudPayload.value = payload
+      } else {
+        cloudData.value = payload
+      }
+      cloudError.value = ''
     }
 
     /* 用密码解密云端数据 */
@@ -681,42 +706,23 @@ const app = createApp({
     const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
 
-    // 从公开 Gist 获取考勤会话（教师端开始/结束上课时自动推送，最实时）
-    async function fetchSessionFromGist() {
-      const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
-      if (!gid) return null
-      try {
-        const resp = await fetch('https://api.github.com/gists/' + gid)
-        if (!resp.ok) return null
-        const gist = await resp.json()
-        const file = gist.files['att_session.json']
-        if (!file) return null
-        const data = JSON.parse(file.content)
-        return data.attSession || null
-      } catch (e) {
-        return null
-      }
-    }
-
+    // 从缓存的云端数据中加载考勤会话（不再单独调用 API）
     function loadAttSession() {
-      // 使用异步方式优先从公开 Gist 获取最新考勤会话
-      fetchSessionFromGist().then(gistSession => {
-        if (gistSession && gistSession.active && gistSession.startedAt) {
-          const sessionDate = new Date(gistSession.startedAt).toDateString()
-          const today = new Date().toDateString()
-          if (sessionDate === today) {
-            attSession.value = gistSession
-            return
+      // 优先从同一 Gist 响应中缓存的考勤会话
+      const cloudAttRaw = localStorage.getItem('_cloud_att_session')
+      if (cloudAttRaw) {
+        try {
+          const s = JSON.parse(cloudAttRaw)
+          if (s && s.active && s.startedAt) {
+            const sessionDate = new Date(s.startedAt).toDateString()
+            if (sessionDate === new Date().toDateString()) {
+              attSession.value = s
+              return
+            }
           }
-        }
-        if (gistSession !== null) {
-          // Gist 有数据但会话无效（不存在或已过期）
-          attSession.value = null
-          return
-        }
-        // Gist 无数据，回退到云端缓存和本地
-        loadAttSessionFallback()
-      })
+        } catch { /* ignore */ }
+      }
+      loadAttSessionFallback()
     }
 
     function loadAttSessionFallback() {
@@ -856,16 +862,19 @@ const app = createApp({
         if (e.key === 'att_records') loadAttRoster()
         if (e.key === 'att_roster') loadAttRoster()
       })
-      // 定期轮询公开 Gist 检测考勤会话变化 (20秒)
+      // 统一轮询：每2分钟一次 API 调用，同时更新学生数据和考勤会话
       if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
         setInterval(async () => {
-          const wasActive = attSessionActive.value
-          await loadAttSession()
-          // 如果会话状态从无效变为有效，同时刷新花名册
-          if (!wasActive && attSessionActive.value) {
-            loadAttRoster()
-          }
-        }, 20000)
+          try {
+            const oldUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
+            await fetchCloudData(true)
+            const newUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
+            if (newUpdatedAt !== oldUpdatedAt) {
+              loadAttRoster()
+            }
+            loadAttSession()
+          } catch (e) { /* 网络错误，静默忽略 */ }
+        }, 2 * 60 * 1000)
         // 页面重新可见时立即刷新数据
         document.addEventListener('visibilitychange', () => {
           if (!document.hidden) {
@@ -875,21 +884,6 @@ const app = createApp({
             })
           }
         })
-      }
-      // 定期刷新云端完整数据 (60秒)，强制刷新绕过缓存
-      if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
-        setInterval(async () => {
-          try {
-            const oldUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
-            await fetchCloudData(true)
-            // 如果数据有更新，重新加载花名册和考勤会话
-            const newUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
-            if (newUpdatedAt !== oldUpdatedAt) {
-              loadAttRoster()
-              loadAttSession()
-            }
-          } catch (e) { /* 网络错误，静默忽略 */ }
-        }, 60 * 1000)
       }
     })
 
