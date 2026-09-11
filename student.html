@@ -369,30 +369,32 @@ const app = createApp({
     /* 从公开 Gist 获取云端数据（可能已加密），带本地缓存 */
     const CACHE_KEY = 'stu_cloud_cache'
     const CACHE_TIME_KEY = 'stu_cloud_cache_time'
-    const CACHE_MAX_AGE = 5 * 60 * 1000 // 5分钟缓存
+    const CACHE_MAX_AGE = 60 * 1000 // 1分钟缓存
 
-    async function fetchCloudData() {
+    async function fetchCloudData(forceRefresh) {
       const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
       if (!gid) {
         cloudError.value = '未配置 Gist ID'
         return null
       }
-      // 先尝试使用本地缓存
-      try {
-        const cached = localStorage.getItem(CACHE_KEY)
-        const cachedTime = parseInt(localStorage.getItem(CACHE_TIME_KEY) || '0')
-        if (cached && (Date.now() - cachedTime < CACHE_MAX_AGE)) {
-          const payload = JSON.parse(cached)
-          if (payload.encrypted) {
-            cloudEncrypted.value = true
-            cloudPayload.value = payload
-          } else {
-            cloudData.value = payload
+      // 先尝试使用本地缓存（强制刷新时跳过）
+      if (!forceRefresh) {
+        try {
+          const cached = localStorage.getItem(CACHE_KEY)
+          const cachedTime = parseInt(localStorage.getItem(CACHE_TIME_KEY) || '0')
+          if (cached && (Date.now() - cachedTime < CACHE_MAX_AGE)) {
+            const payload = JSON.parse(cached)
+            if (payload.encrypted) {
+              cloudEncrypted.value = true
+              cloudPayload.value = payload
+            } else {
+              cloudData.value = payload
+            }
+            cloudError.value = ''
+            return payload
           }
-          cloudError.value = ''
-          return payload
-        }
-      } catch (e) { /* 缓存读取失败，继续尝试网络 */ }
+        } catch (e) { /* 缓存读取失败，继续尝试网络 */ }
+      }
 
       try {
         cloudLoading.value = true
@@ -864,20 +866,30 @@ const app = createApp({
             loadAttRoster()
           }
         }, 20000)
+        // 页面重新可见时立即刷新数据
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) {
+            fetchCloudData(true).then(() => {
+              loadAttRoster()
+              loadAttSession()
+            })
+          }
+        })
       }
-      // 定期刷新云端完整数据 (2分钟)，使用缓存避免 API 限流
+      // 定期刷新云端完整数据 (60秒)，强制刷新绕过缓存
       if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
         setInterval(async () => {
           try {
-            const oldData = cloudData.value
-            await fetchCloudData()
+            const oldUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
+            await fetchCloudData(true)
             // 如果数据有更新，重新加载花名册和考勤会话
-            if (cloudData.value && cloudData.value !== oldData) {
+            const newUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
+            if (newUpdatedAt !== oldUpdatedAt) {
               loadAttRoster()
               loadAttSession()
             }
           } catch (e) { /* 网络错误，静默忽略 */ }
-        }, 2 * 60 * 1000)
+        }, 60 * 1000)
       }
     })
 
