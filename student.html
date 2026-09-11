@@ -146,6 +146,7 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <div v-if="loginErr" class="error-msg">{{ loginErr }}</div>
       <button class="btn-login" @click="doLogin">登 录</button>
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
+      <p style="text-align:center;margin-top:12px"><button @click="clearCache" style="background:none;border:1px solid #ddd;color:#999;padding:4px 12px;border-radius:6px;cursor:pointer;font-size:12px">🗑️ 清除缓存</button></p>
       <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
       <div v-if="!cloudLoading && cloudError" style="text-align:center;margin-top:10px">
         <p style="color:#e74c3c;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ {{ cloudError }}</p>
@@ -586,6 +587,15 @@ const app = createApp({
       loadAttSession()
     }
 
+    function clearCache() {
+      localStorage.removeItem('stu_cloud_cache')
+      localStorage.removeItem('stu_cloud_cache_time')
+      localStorage.removeItem('stu_cloud_etag')
+      localStorage.removeItem('_cloud_att_session')
+      alert('缓存已清除，页面将刷新')
+      location.reload()
+    }
+
     // ---- 作业 ----
     function getHomework() {
       if (cloudData.value && cloudData.value.homework) return cloudData.value.homework
@@ -902,7 +912,7 @@ const app = createApp({
     })
 
     return {
-      loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout, retryLoad,
+      loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout, retryLoad, clearCache,
       cloudData, cloudLoading, cloudEncrypted, cloudError, CLOUD_GIST_ID, localStudentCount,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
