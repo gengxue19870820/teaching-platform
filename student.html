@@ -152,7 +152,7 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
         <p style="color:#e74c3c;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ {{ cloudError }}</p>
         <button @click="retryLoad" style="margin-top:8px;padding:6px 16px;background:#667eea;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🔄 重新加载</button>
       </div>
-      <p v-if="!cloudLoading && !cloudData && !cloudError && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
+      <p v-if="!cloudLoading && !cloudData && !cloudError" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
       <p v-if="!cloudLoading && cloudEncrypted && !cloudData" style="text-align:center;color:#667eea;margin-top:10px;font-size:12px;background:#eef2ff;padding:8px 12px;border-radius:8px">☁️ 云端数据已加载（加密），请输入班级密码后登录</p>
       <p v-if="!cloudLoading && !cloudEncrypted && !cloudError && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
       <p v-if="!cloudLoading && !cloudEncrypted && localStudentCount > 0" style="text-align:center;color:#27ae60;margin-top:10px;font-size:12px">✅ 已检测到 {{ localStudentCount }} 名学生数据</p>
@@ -165,7 +165,7 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
     <div class="welcome-bar">
       <div class="info">欢迎，<strong>{{ user.name }}</strong>（学号：{{ user.studentId }}）</div>
       <div style="display:flex;align-items:center;gap:12px">
-        <span v-if="cloudData" style="font-size:11px;color:#27ae60" title="云端数据已连接，每15秒自动刷新">☁️ 已连接</span>
+        <span v-if="cloudData" style="font-size:11px;color:#27ae60" title="云端数据已连接，每3分钟自动刷新">☁️ 已连接</span>
         <button class="logout-btn" @click="doLogout">退出登录</button>
       </div>
     </div>
@@ -331,8 +331,9 @@ const { createApp, ref, reactive, computed, onMounted } = Vue
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
 /* ===== 云端数据配置 ===== */
-/* 教师在「数据同步」页面点击「发布学生数据」后，将生成的 Gist ID 填入下方 */
-const CLOUD_GIST_ID = 'eba9a4f716d2b2fa777ee6a5d118f01e' // 例如: 'abc123def456'
+/* 教师点击「加密发布学生数据」后，数据会发布到以下静态文件（无API限流） */
+const CLOUD_DATA_URL = 'https://gengxue19870820.github.io/teaching-platform/student_data.json'
+const CLOUD_ATT_URL = 'https://gengxue19870820.github.io/teaching-platform/att_session.json'
 /* ======================== */
 
 const app = createApp({
@@ -370,22 +371,12 @@ const app = createApp({
       return JSON.parse(new TextDecoder().decode(decrypted))
     }
 
-    /* 从公开 Gist 获取云端数据（可能已加密），带本地缓存 + ETag 条件请求 */
+    /* 从静态文件获取云端数据（无API限流，50台电脑同时访问也没问题） */
     const CACHE_KEY = 'stu_cloud_cache'
     const CACHE_TIME_KEY = 'stu_cloud_cache_time'
-    const ETAG_KEY = 'stu_cloud_etag'
-    const CACHE_MAX_AGE = 90 * 1000 // 90秒本地缓存
-
-    /* 统一获取 Gist 全部数据（一次 API 调用获取所有文件） */
-    let _lastFetchTime = 0
-    const MIN_FETCH_INTERVAL = 30 * 1000 // 最少30秒才发一次 API 请求
+    const CACHE_MAX_AGE = 60 * 1000 // 60秒本地缓存，避免频繁请求
 
     async function fetchCloudData(forceRefresh) {
-      const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
-      if (!gid) {
-        cloudError.value = '未配置 Gist ID'
-        return null
-      }
       // 本地缓存检查（强制刷新时跳过）
       if (!forceRefresh) {
         try {
@@ -398,32 +389,11 @@ const app = createApp({
           }
         } catch (e) { /* 缓存读取失败，继续网络请求 */ }
       }
-      // 防 API 限流：距上次请求不足 MIN_FETCH_INTERVAL 时使用缓存
-      if (!forceRefresh && (Date.now() - _lastFetchTime < MIN_FETCH_INTERVAL)) {
-        try {
-          const cached = localStorage.getItem(CACHE_KEY)
-          if (cached) { const p = JSON.parse(cached); _applyCloudPayload(p); return p }
-        } catch (e) { /* ignore */ }
-      }
-
       try {
         cloudLoading.value = true
         cloudError.value = ''
-        // 使用 ETag 条件请求：数据未变时返回 304，不消耗 API 配额
-        const headers = {}
-        const savedEtag = localStorage.getItem(ETAG_KEY)
-        if (savedEtag && !forceRefresh) headers['If-None-Match'] = savedEtag
-        const resp = await fetch('https://api.github.com/gists/' + gid, { headers })
-        _lastFetchTime = Date.now()
-        // 304 Not Modified：数据未变，使用缓存
-        if (resp.status === 304) {
-          localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
-          try {
-            const cached = localStorage.getItem(CACHE_KEY)
-            if (cached) { const p = JSON.parse(cached); _applyCloudPayload(p); return p }
-          } catch (e) { /* ignore */ }
-          return null
-        }
+        // 添加时间戳避免CDN缓存（静态文件无API限流）
+        const resp = await fetch(CLOUD_DATA_URL + '?t=' + Date.now())
         if (!resp.ok) {
           const cached = localStorage.getItem(CACHE_KEY)
           if (cached) {
@@ -435,31 +405,19 @@ const app = createApp({
           cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')'
           return null
         }
-        // 保存 ETag
-        const newEtag = resp.headers.get('ETag')
-        if (newEtag) localStorage.setItem(ETAG_KEY, newEtag)
-        const gist = await resp.json()
-        // 解析学生数据
-        const studentFile = gist.files['student_data.json']
-        if (studentFile) {
-          const payload = JSON.parse(studentFile.content)
-          localStorage.setItem('stu_cloud_gist_id', gid)
-          localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
-          localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
-          // 同时保存考勤会话（从同一 Gist 响应中提取）
-          const attFile = gist.files['att_session.json']
-          if (attFile) {
-            try {
-              const attData = JSON.parse(attFile.content)
-              if (attData.attSession) localStorage.setItem('_cloud_att_session', JSON.stringify(attData.attSession))
-            } catch (e) { /* ignore */ }
+        const payload = await resp.json()
+        localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
+        localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
+        // 同时获取考勤会话（独立静态文件）
+        try {
+          const attResp = await fetch(CLOUD_ATT_URL + '?t=' + Date.now())
+          if (attResp.ok) {
+            const attData = await attResp.json()
+            if (attData.attSession) localStorage.setItem('_cloud_att_session', JSON.stringify(attData.attSession))
           }
-          _applyCloudPayload(payload)
-          return payload
-        } else {
-          cloudError.value = '云端未找到学生数据文件'
-          return null
-        }
+        } catch (e) { /* 考勤文件获取失败不影响主流程 */ }
+        _applyCloudPayload(payload)
+        return payload
       } catch (e) {
         const cached = localStorage.getItem(CACHE_KEY)
         if (cached) {
@@ -590,7 +548,6 @@ const app = createApp({
     function clearCache() {
       localStorage.removeItem('stu_cloud_cache')
       localStorage.removeItem('stu_cloud_cache_time')
-      localStorage.removeItem('stu_cloud_etag')
       localStorage.removeItem('_cloud_att_session')
       alert('缓存已清除，页面将刷新')
       location.reload()
@@ -732,7 +689,7 @@ const app = createApp({
 
     // 从缓存的云端数据中加载考勤会话（不再单独调用 API）
     function loadAttSession() {
-      // 优先从同一 Gist 响应中缓存的考勤会话
+      // 优先从静态文件缓存的考勤会话
       const cloudAttRaw = localStorage.getItem('_cloud_att_session')
       if (cloudAttRaw) {
         try {
@@ -886,34 +843,32 @@ const app = createApp({
         if (e.key === 'att_records') loadAttRoster()
         if (e.key === 'att_roster') loadAttRoster()
       })
-      // 统一轮询：每2分钟一次 API 调用，同时更新学生数据和考勤会话
-      if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
-        setInterval(async () => {
-          try {
-            const oldUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
-            await fetchCloudData(true)
-            const newUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
-            if (newUpdatedAt !== oldUpdatedAt) {
-              loadAttRoster()
-            }
-            loadAttSession()
-          } catch (e) { /* 网络错误，静默忽略 */ }
-        }, 2 * 60 * 1000)
-        // 页面重新可见时立即刷新数据
-        document.addEventListener('visibilitychange', () => {
-          if (!document.hidden) {
-            fetchCloudData(true).then(() => {
-              loadAttRoster()
-              loadAttSession()
-            })
+      // 统一轮询：每3分钟刷新一次静态文件（无API限流）
+      setInterval(async () => {
+        try {
+          const oldUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
+          await fetchCloudData(true)
+          const newUpdatedAt = cloudData.value ? cloudData.value.updatedAt : null
+          if (newUpdatedAt !== oldUpdatedAt) {
+            loadAttRoster()
           }
-        })
-      }
+          loadAttSession()
+        } catch (e) { /* 网络错误，静默忽略 */ }
+      }, 3 * 60 * 1000)
+      // 页面重新可见时立即刷新数据
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          fetchCloudData(true).then(() => {
+            loadAttRoster()
+            loadAttSession()
+          })
+        }
+      })
     })
 
     return {
       loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout, retryLoad, clearCache,
-      cloudData, cloudLoading, cloudEncrypted, cloudError, CLOUD_GIST_ID, localStudentCount,
+      cloudData, cloudLoading, cloudEncrypted, cloudError, localStudentCount,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
