@@ -147,7 +147,10 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
       <button class="btn-login" @click="doLogin">登 录</button>
       <p class="hint" style="text-align:center;margin-top:16px">提示：使用学号+姓名验证身份</p>
       <p v-if="cloudLoading" style="text-align:center;color:#667eea;margin-top:10px;font-size:13px">☁️ 正在加载云端数据…</p>
-      <p v-if="!cloudLoading && cloudError" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ {{ cloudError }}</p>
+      <div v-if="!cloudLoading && cloudError" style="text-align:center;margin-top:10px">
+        <p style="color:#e74c3c;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ {{ cloudError }}</p>
+        <button @click="retryLoad" style="margin-top:8px;padding:6px 16px;background:#667eea;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">🔄 重新加载</button>
+      </div>
       <p v-if="!cloudLoading && !cloudData && !cloudError && !CLOUD_GIST_ID" style="text-align:center;color:#f39c12;margin-top:10px;font-size:12px">⚠️ 未配置云端数据，仅可使用本地数据登录</p>
       <p v-if="!cloudLoading && cloudEncrypted && !cloudData" style="text-align:center;color:#667eea;margin-top:10px;font-size:12px;background:#eef2ff;padding:8px 12px;border-radius:8px">☁️ 云端数据已加载（加密），请输入班级密码后登录</p>
       <p v-if="!cloudLoading && !cloudEncrypted && !cloudError && localStudentCount === 0 && !cloudData" style="text-align:center;color:#e74c3c;margin-top:10px;font-size:12px;background:#fde8e8;padding:8px 12px;border-radius:8px">⚠️ 本地暂无学生数据，请先在教师端「学生信息」或「导入学生」中添加学生后再登录</p>
@@ -572,6 +575,17 @@ const app = createApp({
     }
     function doLogout() { user.value = null; localStorage.removeItem('stu_login') }
 
+    async function retryLoad() {
+      cloudError.value = ''
+      cloudData.value = null
+      cloudEncrypted.value = false
+      cloudLoading.value = true
+      await fetchCloudData(true)
+      cloudLoading.value = false
+      loadAttRoster()
+      loadAttSession()
+    }
+
     // ---- 作业 ----
     function getHomework() {
       if (cloudData.value && cloudData.value.homework) return cloudData.value.homework
@@ -888,7 +902,7 @@ const app = createApp({
     })
 
     return {
-      loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout,
+      loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout, retryLoad,
       cloudData, cloudLoading, cloudEncrypted, cloudError, CLOUD_GIST_ID, localStudentCount,
       homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
