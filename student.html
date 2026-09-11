@@ -679,8 +679,46 @@ const app = createApp({
     const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const hygOpts = [{ v: 'good', l: '✅ 整洁' }, { v: 'fair', l: '⚠️ 一般' }, { v: 'bad', l: '❌ 较差' }]
 
+    // 从公开 Gist 获取考勤会话（教师端开始/结束上课时自动推送，最实时）
+    async function fetchSessionFromGist() {
+      const gid = CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id') || ''
+      if (!gid) return null
+      try {
+        const resp = await fetch('https://api.github.com/gists/' + gid)
+        if (!resp.ok) return null
+        const gist = await resp.json()
+        const file = gist.files['att_session.json']
+        if (!file) return null
+        const data = JSON.parse(file.content)
+        return data.attSession || null
+      } catch (e) {
+        return null
+      }
+    }
+
     function loadAttSession() {
-      // 优先从云端检测考勤会话（支持跨机器）
+      // 使用异步方式优先从公开 Gist 获取最新考勤会话
+      fetchSessionFromGist().then(gistSession => {
+        if (gistSession && gistSession.active && gistSession.startedAt) {
+          const sessionDate = new Date(gistSession.startedAt).toDateString()
+          const today = new Date().toDateString()
+          if (sessionDate === today) {
+            attSession.value = gistSession
+            return
+          }
+        }
+        if (gistSession !== null) {
+          // Gist 有数据但会话无效（不存在或已过期）
+          attSession.value = null
+          return
+        }
+        // Gist 无数据，回退到云端缓存和本地
+        loadAttSessionFallback()
+      })
+    }
+
+    function loadAttSessionFallback() {
+      // 从云端缓存数据检测考勤会话
       if (cloudData.value && cloudData.value.attSession) {
         const s = cloudData.value.attSession
         if (s && s.active && s.startedAt) {
@@ -698,13 +736,11 @@ const app = createApp({
         try {
           const s = JSON.parse(raw)
           if (s && s.active && s.startedAt) {
-            // 仅接受当天的会话，过期自动失效
             const sessionDate = new Date(s.startedAt).toDateString()
             const today = new Date().toDateString()
             if (sessionDate === today) {
               attSession.value = s
             } else {
-              // 过期会话，清除
               attSession.value = null
               try {
                 const expired = JSON.parse(raw)
@@ -818,7 +854,18 @@ const app = createApp({
         if (e.key === 'att_records') loadAttRoster()
         if (e.key === 'att_roster') loadAttRoster()
       })
-      // 定期刷新云端数据 (2分钟)，使用缓存避免 API 限流
+      // 定期轮询公开 Gist 检测考勤会话变化 (20秒)
+      if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
+        setInterval(async () => {
+          const wasActive = attSessionActive.value
+          await loadAttSession()
+          // 如果会话状态从无效变为有效，同时刷新花名册
+          if (!wasActive && attSessionActive.value) {
+            loadAttRoster()
+          }
+        }, 20000)
+      }
+      // 定期刷新云端完整数据 (2分钟)，使用缓存避免 API 限流
       if (CLOUD_GIST_ID || localStorage.getItem('stu_cloud_gist_id')) {
         setInterval(async () => {
           try {
