@@ -335,6 +335,9 @@ const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 const PAGES_DATA_URL = 'https://gengxue19870820.github.io/teaching-platform/student_data.json'
 const TEACHER_GITHUB_USER = 'gengxue19870820'
 const GIST_DESCRIPTION = '教学管理平台-学生数据（公开，供学生端读取）'
+/* 硬编码 Gist ID（避免机器重启后 localStorage 清空导致集中 API 调用发现 Gist） */
+const DEFAULT_GIST_ID = 'ff28d8f82ecf01a863578cd112fc4593'
+const DEFAULT_GIST_RAW_URL = 'https://gist.githubusercontent.com/' + TEACHER_GITHUB_USER + '/' + DEFAULT_GIST_ID + '/raw/student_data.json'
 const GIST_ID_CACHE_KEY = 'stu_public_gist_id'
 const GIST_RAW_URL_CACHE_KEY = 'stu_gist_rawUrl'
 const GIST_RAW_URL_TIME_KEY = 'stu_gist_rawUrl_time'
@@ -388,7 +391,7 @@ const app = createApp({
       return await resp.json()
     }
 
-    /* 通道2：发现 Gist 的 raw URL（只需1次API调用，之后全部用 raw URL，无限制） */
+    /* 通道2：获取 Gist raw URL（优先硬编码零API调用，回退API发现） */
     async function discoverGistRawUrl() {
       // 检查 raw URL 缓存（24小时有效）
       try {
@@ -396,36 +399,37 @@ const app = createApp({
         const cachedTime = parseInt(localStorage.getItem(GIST_RAW_URL_TIME_KEY) || '0')
         if (cachedUrl && (Date.now() - cachedTime < GIST_RAW_URL_MAX_AGE)) return cachedUrl
       } catch { /* 缓存读取失败 */ }
-      // 检查 Gist ID 缓存
-      let gistId = localStorage.getItem(GIST_ID_CACHE_KEY)
-      if (!gistId) {
-        // 搜索教师的公开 Gist（唯一需要 API 调用的地方）
-        try {
-          const resp = await fetch('https://api.github.com/users/' + TEACHER_GITHUB_USER + '/gists?per_page=10&t=' + Date.now())
-          if (!resp.ok) return null
-          const gists = await resp.json()
-          for (const g of gists) {
-            if (g.description === GIST_DESCRIPTION) {
-              gistId = g.id
-              localStorage.setItem(GIST_ID_CACHE_KEY, gistId)
-              break
+      // 直接使用硬编码的 raw URL（机器重启后也无需任何 API 调用）
+      // Gist 通过 PATCH 更新时 ID 不变，所以硬编码是安全的
+      localStorage.setItem(GIST_RAW_URL_CACHE_KEY, DEFAULT_GIST_RAW_URL)
+      localStorage.setItem(GIST_RAW_URL_TIME_KEY, Date.now().toString())
+      return DEFAULT_GIST_RAW_URL
+    }
+
+    /* 最后回退：通过 API 搜索教师的新 Gist（仅在硬编码 URL 失效时调用） */
+    async function _discoverGistByApi() {
+      try {
+        const resp = await fetch('https://api.github.com/users/' + TEACHER_GITHUB_USER + '/gists?per_page=10&t=' + Date.now())
+        if (!resp.ok) return null
+        const gists = await resp.json()
+        for (const g of gists) {
+          if (g.description === GIST_DESCRIPTION) {
+            // 找到了新 Gist，获取详情提取 raw URL
+            const detail = await fetch('https://api.github.com/gists/' + g.id + '?t=' + Date.now())
+            if (!detail.ok) continue
+            const gistData = await detail.json()
+            const file = gistData.files['student_data.json']
+            if (file && file.raw_url) {
+              // 缓存新的 raw URL
+              localStorage.setItem(GIST_RAW_URL_CACHE_KEY, file.raw_url)
+              localStorage.setItem(GIST_RAW_URL_TIME_KEY, Date.now().toString())
+              localStorage.setItem(GIST_ID_CACHE_KEY, g.id)
+              return file.raw_url
             }
           }
-        } catch (e) { return null }
-      }
-      if (!gistId) return null
-      // 获取 Gist 详情，提取 raw URL（只需1次API调用）
-      try {
-        const resp = await fetch('https://api.github.com/gists/' + gistId + '?t=' + Date.now())
-        if (!resp.ok) return null
-        const gist = await resp.json()
-        const file = gist.files['student_data.json']
-        if (!file || !file.raw_url) return null
-        // 缓存 raw URL（24小时内有效，因为 commit SHA 会变）
-        localStorage.setItem(GIST_RAW_URL_CACHE_KEY, file.raw_url)
-        localStorage.setItem(GIST_RAW_URL_TIME_KEY, Date.now().toString())
-        return file.raw_url
-      } catch (e) { return null }
+        }
+      } catch (e) { console.warn('API 搜索 Gist 失败:', e.message) }
+      return null
     }
 
     /* 通道2：从 raw URL 获取学生数据（raw.githubusercontent.com 无 API 限制） */
@@ -462,8 +466,20 @@ const app = createApp({
           try {
             const rawUrl = await discoverGistRawUrl()
             if (rawUrl) {
-              payload = await fetchFromGistRaw(rawUrl)
-              source = 'gist-raw'
+              try {
+                payload = await fetchFromGistRaw(rawUrl)
+                source = 'gist-raw'
+              } catch (fetchErr) {
+                // 硬编码的 raw URL 失败（Gist 可能被删除重建），尝试 API 搜索新 Gist
+                console.warn('硬编码 raw URL 失效，尝试 API 搜索新 Gist:', fetchErr.message)
+                localStorage.removeItem(GIST_RAW_URL_CACHE_KEY)
+                localStorage.removeItem(GIST_RAW_URL_TIME_KEY)
+                const newUrl = await _discoverGistByApi()
+                if (newUrl) {
+                  payload = await fetchFromGistRaw(newUrl)
+                  source = 'gist-raw-discovered'
+                }
+              }
             }
           } catch (e2) {
             console.warn('Gist raw 回退也失败:', e2.message)
