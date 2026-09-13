@@ -331,9 +331,10 @@ const { createApp, ref, reactive, computed, onMounted } = Vue
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
 /* ===== 云端数据配置 ===== */
-/* 教师点击「加密发布学生数据」后，数据会发布到以下静态文件（无API限流） */
-const CLOUD_DATA_URL = 'https://gengxue19870820.github.io/teaching-platform/student_data.json'
-const CLOUD_ATT_URL = 'https://gengxue19870820.github.io/teaching-platform/att_session.json'
+/* 教师点击「发布学生数据」后，数据会发布到公开 Gist（只需 gist 权限） */
+const TEACHER_GITHUB_USER = 'gengxue19870820'
+const GIST_DESCRIPTION = 'teaching-platform-student-data'
+const GIST_ID_CACHE_KEY = 'stu_public_gist_id'
 /* ======================== */
 
 const app = createApp({
@@ -371,10 +372,41 @@ const app = createApp({
       return JSON.parse(new TextDecoder().decode(decrypted))
     }
 
-    /* 从静态文件获取云端数据（无API限流，50台电脑同时访问也没问题） */
+    /* 从公开 Gist 获取云端数据 */
     const CACHE_KEY = 'stu_cloud_cache'
     const CACHE_TIME_KEY = 'stu_cloud_cache_time'
-    const CACHE_MAX_AGE = 60 * 1000 // 60秒本地缓存，避免频繁请求
+    const CACHE_MAX_AGE = 60 * 1000 // 60秒本地缓存
+
+    /* 发现公开 Gist ID（搜索教师的 Gist 列表） */
+    async function discoverGistId() {
+      // 先检查缓存
+      const cached = localStorage.getItem(GIST_ID_CACHE_KEY)
+      if (cached) return cached
+      // 搜索教师的公开 Gist
+      try {
+        const resp = await fetch('https://api.github.com/users/' + TEACHER_GITHUB_USER + '/gists?per_page=30&t=' + Date.now())
+        if (!resp.ok) return null
+        const gists = await resp.json()
+        for (const g of gists) {
+          if (g.description === GIST_DESCRIPTION) {
+            localStorage.setItem(GIST_ID_CACHE_KEY, g.id)
+            return g.id
+          }
+        }
+      } catch (e) { /* 网络错误 */ }
+      return null
+    }
+
+    /* 从公开 Gist 获取学生数据 */
+    async function fetchFromGist(gistId, forceRefresh) {
+      const url = 'https://api.github.com/gists/' + gistId + '?t=' + Date.now()
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error('Gist 请求失败 (HTTP ' + resp.status + ')')
+      const gist = await resp.json()
+      const file = gist.files['student_data.json']
+      if (!file) throw new Error('未找到学生数据文件')
+      return JSON.parse(file.content)
+    }
 
     async function fetchCloudData(forceRefresh) {
       // 本地缓存检查（强制刷新时跳过）
@@ -387,35 +419,33 @@ const app = createApp({
             _applyCloudPayload(payload)
             return payload
           }
-        } catch (e) { /* 缓存读取失败，继续网络请求 */ }
+        } catch (e) { /* 缓存读取失败 */ }
       }
       try {
         cloudLoading.value = true
         cloudError.value = ''
-        // 添加时间戳避免CDN缓存（静态文件无API限流）
-        const resp = await fetch(CLOUD_DATA_URL + '?t=' + Date.now())
-        if (!resp.ok) {
+        // 发现 Gist ID
+        let gistId = localStorage.getItem(GIST_ID_CACHE_KEY)
+        if (!gistId) gistId = await discoverGistId()
+        if (!gistId) {
           const cached = localStorage.getItem(CACHE_KEY)
           if (cached) {
             const payload = JSON.parse(cached)
             _applyCloudPayload(payload)
-            cloudError.value = '⚠️ 云端连接失败(HTTP ' + resp.status + ')，已使用本地缓存'
+            cloudError.value = '⚠️ 教师尚未发布学生数据，已使用本地缓存'
             return payload
           }
-          cloudError.value = '云端数据获取失败 (HTTP ' + resp.status + ')'
+          cloudError.value = '教师尚未发布学生数据，请在教师端点击「发布学生数据」后再登录'
           return null
         }
-        const payload = await resp.json()
+        // 从 Gist 获取数据
+        const payload = await fetchFromGist(gistId, forceRefresh)
         localStorage.setItem(CACHE_KEY, JSON.stringify(payload))
         localStorage.setItem(CACHE_TIME_KEY, Date.now().toString())
-        // 同时获取考勤会话（独立静态文件）
-        try {
-          const attResp = await fetch(CLOUD_ATT_URL + '?t=' + Date.now())
-          if (attResp.ok) {
-            const attData = await attResp.json()
-            if (attData.attSession) localStorage.setItem('_cloud_att_session', JSON.stringify(attData.attSession))
-          }
-        } catch (e) { /* 考勤文件获取失败不影响主流程 */ }
+        // 考勤会话已包含在学生数据中
+        if (payload.attSession) {
+          localStorage.setItem('_cloud_att_session', JSON.stringify(payload.attSession))
+        }
         _applyCloudPayload(payload)
         return payload
       } catch (e) {
@@ -428,7 +458,7 @@ const app = createApp({
             return payload
           } catch (e2) { /* ignore */ }
         }
-        cloudError.value = '云端数据获取异常: ' + e.message
+        cloudError.value = '云端数据获取失败: ' + e.message
         return null
       } finally {
         cloudLoading.value = false
@@ -548,6 +578,7 @@ const app = createApp({
     function clearCache() {
       localStorage.removeItem('stu_cloud_cache')
       localStorage.removeItem('stu_cloud_cache_time')
+      localStorage.removeItem('stu_public_gist_id')
       localStorage.removeItem('_cloud_att_session')
       alert('缓存已清除，页面将刷新')
       location.reload()
