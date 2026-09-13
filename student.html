@@ -331,11 +331,14 @@ const { createApp, ref, reactive, computed, onMounted } = Vue
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
 /* ===== 云端数据配置 ===== */
-/* 双通道：优先 gh-pages 静态文件（无限制），回退到公开 Gist API */
+/* 双通道：优先 gh-pages 静态文件（无限制），回退到 Gist raw URL（无API限制） */
 const PAGES_DATA_URL = 'https://gengxue19870820.github.io/teaching-platform/student_data.json'
 const TEACHER_GITHUB_USER = 'gengxue19870820'
 const GIST_DESCRIPTION = '教学管理平台-学生数据（公开，供学生端读取）'
 const GIST_ID_CACHE_KEY = 'stu_public_gist_id'
+const GIST_RAW_URL_CACHE_KEY = 'stu_gist_rawUrl'
+const GIST_RAW_URL_TIME_KEY = 'stu_gist_rawUrl_time'
+const GIST_RAW_URL_MAX_AGE = 24 * 60 * 60 * 1000 // raw URL 缓存24小时
 /* ======================== */
 
 const app = createApp({
@@ -373,10 +376,10 @@ const app = createApp({
       return JSON.parse(new TextDecoder().decode(decrypted))
     }
 
-    /* 双通道获取云端数据：优先 gh-pages（无限制），回退 Gist API */
+    /* 双通道获取云端数据：优先 gh-pages（无限制），回退 Gist raw URL（无API限制） */
     const CACHE_KEY = 'stu_cloud_cache'
     const CACHE_TIME_KEY = 'stu_cloud_cache_time'
-    const CACHE_MAX_AGE = 5 * 60 * 1000 // 5分钟本地缓存，减少网络请求
+    const CACHE_MAX_AGE = 5 * 60 * 1000 // 5分钟本地缓存
 
     /* 通道1：从 gh-pages 静态文件获取（无 API 限制，50台机器同时访问也没问题） */
     async function fetchFromPages() {
@@ -385,32 +388,51 @@ const app = createApp({
       return await resp.json()
     }
 
-    /* 通道2：发现公开 Gist ID（搜索教师的 Gist 列表） */
-    async function discoverGistId() {
-      const cached = localStorage.getItem(GIST_ID_CACHE_KEY)
-      if (cached) return cached
+    /* 通道2：发现 Gist 的 raw URL（只需1次API调用，之后全部用 raw URL，无限制） */
+    async function discoverGistRawUrl() {
+      // 检查 raw URL 缓存（24小时有效）
       try {
-        const resp = await fetch('https://api.github.com/users/' + TEACHER_GITHUB_USER + '/gists?per_page=10&t=' + Date.now())
-        if (!resp.ok) return null
-        const gists = await resp.json()
-        for (const g of gists) {
-          if (g.description === GIST_DESCRIPTION) {
-            localStorage.setItem(GIST_ID_CACHE_KEY, g.id)
-            return g.id
+        const cachedUrl = localStorage.getItem(GIST_RAW_URL_CACHE_KEY)
+        const cachedTime = parseInt(localStorage.getItem(GIST_RAW_URL_TIME_KEY) || '0')
+        if (cachedUrl && (Date.now() - cachedTime < GIST_RAW_URL_MAX_AGE)) return cachedUrl
+      } catch { /* 缓存读取失败 */ }
+      // 检查 Gist ID 缓存
+      let gistId = localStorage.getItem(GIST_ID_CACHE_KEY)
+      if (!gistId) {
+        // 搜索教师的公开 Gist（唯一需要 API 调用的地方）
+        try {
+          const resp = await fetch('https://api.github.com/users/' + TEACHER_GITHUB_USER + '/gists?per_page=10&t=' + Date.now())
+          if (!resp.ok) return null
+          const gists = await resp.json()
+          for (const g of gists) {
+            if (g.description === GIST_DESCRIPTION) {
+              gistId = g.id
+              localStorage.setItem(GIST_ID_CACHE_KEY, gistId)
+              break
+            }
           }
-        }
-      } catch (e) { /* 网络错误 */ }
-      return null
+        } catch (e) { return null }
+      }
+      if (!gistId) return null
+      // 获取 Gist 详情，提取 raw URL（只需1次API调用）
+      try {
+        const resp = await fetch('https://api.github.com/gists/' + gistId + '?t=' + Date.now())
+        if (!resp.ok) return null
+        const gist = await resp.json()
+        const file = gist.files['student_data.json']
+        if (!file || !file.raw_url) return null
+        // 缓存 raw URL（24小时内有效，因为 commit SHA 会变）
+        localStorage.setItem(GIST_RAW_URL_CACHE_KEY, file.raw_url)
+        localStorage.setItem(GIST_RAW_URL_TIME_KEY, Date.now().toString())
+        return file.raw_url
+      } catch (e) { return null }
     }
 
-    /* 通道2：从公开 Gist 获取学生数据（有 API 限制，作为回退） */
-    async function fetchFromGist(gistId) {
-      const resp = await fetch('https://api.github.com/gists/' + gistId + '?t=' + Date.now())
-      if (!resp.ok) throw new Error('Gist HTTP ' + resp.status)
-      const gist = await resp.json()
-      const file = gist.files['student_data.json']
-      if (!file) throw new Error('未找到学生数据文件')
-      return JSON.parse(file.content)
+    /* 通道2：从 raw URL 获取学生数据（raw.githubusercontent.com 无 API 限制） */
+    async function fetchFromGistRaw(rawUrl) {
+      const resp = await fetch(rawUrl + '?t=' + Date.now())
+      if (!resp.ok) throw new Error('HTTP ' + resp.status)
+      return await resp.json()
     }
 
     async function fetchCloudData(forceRefresh) {
@@ -436,16 +458,15 @@ const app = createApp({
           payload = await fetchFromPages()
           source = 'gh-pages'
         } catch (e1) {
-          // gh-pages 失败，尝试通道2：Gist API
+          // gh-pages 失败，尝试通道2：Gist raw URL（也无 API 限制）
           try {
-            let gistId = localStorage.getItem(GIST_ID_CACHE_KEY)
-            if (!gistId) gistId = await discoverGistId()
-            if (gistId) {
-              payload = await fetchFromGist(gistId)
-              source = 'gist'
+            const rawUrl = await discoverGistRawUrl()
+            if (rawUrl) {
+              payload = await fetchFromGistRaw(rawUrl)
+              source = 'gist-raw'
             }
           } catch (e2) {
-            console.warn('Gist 回退也失败:', e2.message)
+            console.warn('Gist raw 回退也失败:', e2.message)
           }
         }
         if (!payload) {
@@ -467,7 +488,8 @@ const app = createApp({
           localStorage.setItem('_cloud_att_session', JSON.stringify(payload.attSession))
         }
         _applyCloudPayload(payload)
-        if (source === 'gh-pages') console.log('[云端] 从 gh-pages 静态文件获取数据成功（无限制）')
+        if (source === 'gh-pages') console.log('[云端] 从 gh-pages 获取数据（无限制）')
+        else if (source === 'gist-raw') console.log('[云端] 从 Gist raw URL 获取数据（无限制）')
         return payload
       } catch (e) {
         const cached = localStorage.getItem(CACHE_KEY)
@@ -600,6 +622,8 @@ const app = createApp({
       localStorage.removeItem('stu_cloud_cache')
       localStorage.removeItem('stu_cloud_cache_time')
       localStorage.removeItem('stu_public_gist_id')
+      localStorage.removeItem('stu_gist_rawUrl')
+      localStorage.removeItem('stu_gist_rawUrl_time')
       localStorage.removeItem('_cloud_att_session')
       alert('缓存已清除，页面将刷新')
       location.reload()
