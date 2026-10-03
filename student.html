@@ -278,7 +278,7 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
             </div>
           </fieldset>
           <div class="att-fg"><label>备注（选填）</label><textarea v-model="attForm.remark" rows="2" placeholder="如有特殊情况请说明"></textarea></div>
-          <button class="btn-att" @click="submitAtt">提交登记</button>
+          <button class="btn-att" @click="submitAtt" :disabled="attSubmitting">{{ attSubmitting ? '⏳ 提交中...' : '提交登记' }}</button>
         </div>
       </div>
     </div>
@@ -297,21 +297,21 @@ legend{font-size:14px;font-weight:600;color:#333;padding:0 6px}
         <div class="upload-area" @click="$refs.fileInput.click()">
           <div class="up-icon">📁</div>
           <div class="up-text">点击选择文件</div>
-          <div class="up-hint">支持各类文件，单个文件不超过5MB</div>
+          <div class="up-hint">支持各类文件，单个文件不超过1GB</div>
         </div>
         <input ref="fileInput" type="file" multiple @change="onFileSelect" style="display:none" />
       </div>
       <div v-if="pendingFiles.length" class="attach-list">
-        <div v-for="(f,i) in pendingFiles" :key="i" class="attach-item">
-          <span class="att-icon">📎</span>
+        <div v-for="(f,i) in pendingFiles" :key="i" class="attach-item" :style="f.uploadError?'border-color:#e74c3c':''">
+          <span class="att-icon">{{ f.uploading ? '⏳' : f.uploadError ? '❌' : '📎' }}</span>
           <span class="att-name">{{ f.name }}</span>
-          <span class="att-size">{{ fmtSize(f.size) }}</span>
+          <span class="att-size">{{ f.uploading ? (f.progressText || '上传中...') : f.uploadError ? '上传失败' : '✅ ' + fmtSize(f.size) }}</span>
           <span class="att-del" @click="removeFile(i)" title="移除">✕</span>
         </div>
       </div>
       <div class="modal-btns">
         <button class="cancel" @click="submitModal=null;pendingFiles=[]">取消</button>
-        <button class="submit" @click="doSubmitHw" :disabled="!submitContent.trim() && !pendingFiles.length">提交</button>
+        <button class="submit" @click="doSubmitHw" :disabled="fileUploading || (!submitContent.trim() && !pendingFiles.filter(p=>p.cosKey).length)">{{ fileUploading ? '上传中...' : '提交' }}</button>
       </div>
     </div>
   </div>
@@ -338,18 +338,159 @@ const { createApp, ref, reactive, computed, onMounted } = Vue
 const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB
 
 /* ===== 云端数据配置 ===== */
-/* 双通道：优先 gh-pages 静态文件（无限制），回退到 Gist raw URL（无API限制） */
-const PAGES_DATA_URL = 'https://gengxue19870820.github.io/teaching-platform/student_data.json'
-const TEACHER_GITHUB_USER = 'gengxue19870820'
-const GIST_DESCRIPTION = '教学管理平台-学生数据（公开，供学生端读取）'
-/* 硬编码 Gist ID（避免机器重启后 localStorage 清空导致集中 API 调用发现 Gist） */
-const DEFAULT_GIST_ID = 'ff28d8f82ecf01a863578cd112fc4593'
-const DEFAULT_GIST_RAW_URL = 'https://gist.githubusercontent.com/' + TEACHER_GITHUB_USER + '/' + DEFAULT_GIST_ID + '/raw/student_data.json'
-const GIST_ID_CACHE_KEY = 'stu_public_gist_id'
-const GIST_RAW_URL_CACHE_KEY = 'stu_gist_rawUrl'
-const GIST_RAW_URL_TIME_KEY = 'stu_gist_rawUrl_time'
-const GIST_RAW_URL_MAX_AGE = 24 * 60 * 60 * 1000 // raw URL 缓存24小时
+/* 腾讯云 COS（与部署平台一致，无需 GitHub） */
+const COS_DATA_URL = 'https://stu.molinjiayuan.top/student_data.json'
+
+/* COS 作业附件上传配置 */
+const COS_CFG = { SecretId: 'AKID5EBxWu6E9ZnodGi060kHdmlX8WQ9g2CA', SecretKey: 'oWCoHoSA2lKjgjfXFn80fEnCSdu45xfD', Bucket: 'aixxkj-1318639425', Region: 'ap-hongkong', Domain: 'https://molinjiayuan.top' }
+function _cosEncUrl(s) { return s.split('/').map(p => encodeURIComponent(p).replace(/!/g,'%21').replace(/'/g,'%27').replace(/\(/g,'%28').replace(/\)/g,'%29').replace(/\*/g,'%2A')).join('/') }
+function _hex(b) { return Array.from(b, x => x.toString(16).padStart(2,'0')).join('') }
+async function _sha1Bytes(d) { return new Uint8Array(await crypto.subtle.digest('SHA-1', d)) }
+async function _hmacHex(k, d) { const e=new TextEncoder(), k_=await crypto.subtle.importKey('raw',e.encode(k),{name:'HMAC',hash:'SHA-1'},false,['sign']); return _hex(new Uint8Array(await crypto.subtle.sign('HMAC',k_,e.encode(d)))) }
+async function cosUploadFile(file, homeworkId, studentId) {
+  const enc = new TextEncoder()
+  const safeName = file.name.replace(/[^a-zA-Z0-9._\u4e00-\u9fa5-]/g, '_')
+  const cosKey = 'homework_files/' + homeworkId + '/' + studentId + '_' + Date.now() + '_' + safeName
+  const bucket = COS_CFG.Bucket, region = COS_CFG.Region
+  const now = Math.floor(Date.now()/1000), exp = now+900, keyTime = now+';'+exp
+  const rawPath = '/' + cosKey, encPath = '/' + _cosEncUrl(cosKey), ct = 'application/octet-stream'
+  const skHex = await _hmacHex(COS_CFG.SecretKey, keyTime)
+  const hs = 'content-type=' + encodeURIComponent(ct)
+  const fs = 'put\n'+rawPath+'\n\n'+hs+'\n'
+  const fh = _hex(await _sha1Bytes(enc.encode(fs)))
+  const sts = 'sha1\n'+keyTime+'\n'+fh+'\n'
+  const sig = await _hmacHex(skHex, sts)
+  const auth = 'q-sign-algorithm=sha1&q-ak='+COS_CFG.SecretId+'&q-sign-time='+keyTime+'&q-key-time='+keyTime+'&q-header-list=content-type&q-url-param-list=&q-signature='+sig
+  const resp = await fetch('https://'+bucket+'.cos.'+region+'.myqcloud.com'+encPath, { method:'PUT', headers:{'Authorization':auth,'Content-Type':ct}, body:file })
+  if (!resp.ok) { const t = await resp.text().catch(()=>''); throw new Error('上传失败 ('+resp.status+'): '+t.slice(0,200)) }
+  return { name: file.name, size: file.size, type: file.type, cosKey }
+}
+
+/* COS 上传 JSON 数据（用于考勤记录等同步） */
+const ATT_RECORDS_KEY = 'att_records_cloud.json'
+async function cosPutJSON(cosKey, data) {
+  const enc = new TextEncoder()
+  const body = JSON.stringify(data)
+  const bodyBytes = enc.encode(body)
+  const bucket = COS_CFG.Bucket, region = COS_CFG.Region
+  const now = Math.floor(Date.now()/1000), exp = now+900, keyTime = now+';'+exp
+  const rawPath = '/' + cosKey, ct = 'application/json; charset=utf-8'
+  const skHex = await _hmacHex(COS_CFG.SecretKey, keyTime)
+  const hs = 'content-type=' + encodeURIComponent(ct)
+  const fs = 'put\n'+rawPath+'\n\n'+hs+'\n'
+  const fh = _hex(await _sha1Bytes(enc.encode(fs)))
+  const sts = 'sha1\n'+keyTime+'\n'+fh+'\n'
+  const sig = await _hmacHex(skHex, sts)
+  const auth = 'q-sign-algorithm=sha1&q-ak='+COS_CFG.SecretId+'&q-sign-time='+keyTime+'&q-key-time='+keyTime+'&q-header-list=content-type&q-url-param-list=&q-signature='+sig
+  const encPath = '/' + _cosEncUrl(cosKey)
+  const resp = await fetch('https://'+bucket+'.cos.'+region+'.myqcloud.com'+encPath, { method:'PUT', headers:{'Authorization':auth,'Content-Type':ct}, body:bodyBytes })
+  if (!resp.ok) { const t = await resp.text().catch(()=>''); throw new Error('上传失败 ('+resp.status+'): '+t.slice(0,100)) }
+}
+
+/* 上传考勤记录到 COS（合并模式：读取现有记录，追加新记录，写回） */
+/* 带随机延迟分散和重试机制，解决多学生同时提交时的并发冲突 */
+async function uploadAttRecord(record, maxRetries) {
+  maxRetries = maxRetries || 5
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // 首次尝试前随机延迟 1-6 秒，分散并发请求
+      if (attempt === 0) {
+        const delay = 1000 + Math.random() * 5000
+        await new Promise(resolve => setTimeout(resolve, delay))
+      } else {
+        // 重试时指数退避 + 随机抖动
+        const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000) + Math.random() * 3000
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+      const url = 'https://'+COS_CFG.Bucket+'.cos.'+COS_CFG.Region+'.myqcloud.com/' + _cosEncUrl(ATT_RECORDS_KEY) + '?t=' + Date.now()
+      let existing = []
+      try {
+        const resp = await fetch(url)
+        if (resp.ok) existing = await resp.json()
+        if (!Array.isArray(existing)) existing = []
+      } catch { /* 文件不存在，从空数组开始 */ }
+      // 防重复：检查该学生在此会话中是否已有记录（含 className 维度）
+      const dup = existing.find(r => r.studentId === record.studentId && r.sessionId === record.sessionId && r.className === record.className)
+      if (dup) {
+        console.log('[考勤同步] 记录已存在，跳过', record.studentName)
+        return true
+      }
+      existing.push(record)
+      await cosPutJSON(ATT_RECORDS_KEY, existing)
+      console.log('[考勤同步] 成功 (第' + (attempt + 1) + '次尝试)', record.studentName, '(共', existing.length, '条)')
+      return true
+    } catch (e) {
+      console.warn('[考勤同步] 第' + (attempt + 1) + '次失败:', e.message)
+      if (attempt >= maxRetries - 1) {
+        console.error('[考勤同步] 最终失败，已重试', maxRetries, '次')
+        return false
+      }
+    }
+  }
+  return false
+}
 /* ======================== */
+
+/* ===== COS 分片上传（支持大文件，最大 5GB） ===== */
+const CHUNK_SIZE = 5 * 1024 * 1024 // 5MB 每片
+
+async function cosSignedFetch(method, uriPath, headers, body, headerList) {
+  const enc = new TextEncoder()
+  const bucket = COS_CFG.Bucket, region = COS_CFG.Region
+  const now = Math.floor(Date.now()/1000), exp = now+900, keyTime = now+';'+exp
+  const skHex = await _hmacHex(COS_CFG.SecretKey, keyTime)
+  const hs = (headerList || Object.keys(headers).map(k => k.toLowerCase())).map(k => k.toLowerCase() + '=' + encodeURIComponent(headers[k] || '')).join('&')
+  const hl = (headerList || Object.keys(headers).map(k => k.toLowerCase())).join('&')
+  // 签名用原始路径（去掉 ?query 部分），请求用编码路径
+  const rawPath = uriPath.split('?')[0].split('/').map(p => decodeURIComponent(p)).join('/')
+  const fs = method.toLowerCase() + '\n' + rawPath + '\n\n' + hs + '\n'
+  const fh = _hex(await _sha1Bytes(enc.encode(fs)))
+  const sts = 'sha1\n' + keyTime + '\n' + fh + '\n'
+  const sig = await _hmacHex(skHex, sts)
+  const auth = 'q-sign-algorithm=sha1&q-ak=' + COS_CFG.SecretId + '&q-sign-time=' + keyTime + '&q-key-time=' + keyTime + '&q-header-list=' + hl + '&q-url-param-list=&q-signature=' + sig
+  const url = 'https://' + bucket + '.cos.' + region + '.myqcloud.com' + uriPath
+  const resp = await fetch(url, { method: method.toUpperCase(), headers: { ...headers, 'Authorization': auth }, body: body || undefined })
+  return resp
+}
+
+/* 分片上传大文件，返回 { name, size, type, cosKey, multipart: true } */
+async function cosMultipartUpload(file, cosKey, onProgress) {
+  const bucket = COS_CFG.Bucket, region = COS_CFG.Region
+  const encKey = _cosEncUrl(cosKey)
+  const totalParts = Math.ceil(file.size / CHUNK_SIZE)
+
+  // 1. 初始化分片上传
+  const initResp = await cosSignedFetch('POST', '/' + encKey + '?uploads', { 'content-type': 'application/octet-stream' }, null, ['content-type'])
+  if (!initResp.ok) { const t = await initResp.text().catch(() => ''); throw new Error('初始化上传失败 (' + initResp.status + '): ' + t.slice(0, 100)) }
+  const initXml = await initResp.text()
+  const uploadId = initXml.match(/<UploadId>(.*?)<\/UploadId>/)[1]
+
+  // 2. 上传每个分片
+  const parts = []
+  for (let i = 0; i < totalParts; i++) {
+    const start = i * CHUNK_SIZE
+    const end = Math.min(start + CHUNK_SIZE, file.size)
+    const chunk = file.slice(start, end)
+    const partNum = i + 1
+    const partResp = await cosSignedFetch('PUT', '/' + encKey + '?partNumber=' + partNum + '&uploadId=' + uploadId, { 'content-type': 'application/octet-stream' }, chunk, ['content-type'])
+    if (!partResp.ok) throw new Error('分片 ' + partNum + ' 上传失败 (' + partResp.status + ')')
+    const etag = partResp.headers.get('ETag').replace(/"/g, '')
+    parts.push({ partNumber: partNum, etag: etag })
+    if (onProgress) onProgress(partNum, totalParts)
+  }
+
+  // 3. 完成分片上传
+  let xmlBody = '<CompleteMultipartUpload>'
+  parts.forEach(p => { xmlBody += '<Part><PartNumber>' + p.partNumber + '</PartNumber><ETag>"' + p.etag + '"</ETag></Part>' })
+  xmlBody += '</CompleteMultipartUpload>'
+  const enc = new TextEncoder()
+  const xmlBytes = enc.encode(xmlBody)
+  const completeResp = await cosSignedFetch('POST', '/' + encKey + '?uploadId=' + uploadId, { 'content-type': 'application/xml' }, xmlBytes, ['content-type'])
+  if (!completeResp.ok) { const t = await completeResp.text().catch(() => ''); throw new Error('完成上传失败 (' + completeResp.status + '): ' + t.slice(0, 100)) }
+
+  return { name: file.name, size: file.size, type: file.type, cosKey, multipart: true }
+}
+/* ===== 分片上传结束 ===== */
 
 const app = createApp({
   setup() {
@@ -386,65 +527,10 @@ const app = createApp({
       return JSON.parse(new TextDecoder().decode(decrypted))
     }
 
-    /* 双通道获取云端数据：优先 gh-pages（无限制），回退 Gist raw URL（无API限制） */
+    /* 从腾讯云 COS 获取云端数据 */
     const CACHE_KEY = 'stu_cloud_cache'
     const CACHE_TIME_KEY = 'stu_cloud_cache_time'
     const CACHE_MAX_AGE = 5 * 60 * 1000 // 5分钟本地缓存
-
-    /* 通道1：从 gh-pages 静态文件获取（无 API 限制，50台机器同时访问也没问题） */
-    async function fetchFromPages() {
-      const resp = await fetch(PAGES_DATA_URL + '?t=' + Date.now())
-      if (!resp.ok) throw new Error('HTTP ' + resp.status)
-      return await resp.json()
-    }
-
-    /* 通道2：获取 Gist raw URL（优先硬编码零API调用，回退API发现） */
-    async function discoverGistRawUrl() {
-      // 检查 raw URL 缓存（24小时有效）
-      try {
-        const cachedUrl = localStorage.getItem(GIST_RAW_URL_CACHE_KEY)
-        const cachedTime = parseInt(localStorage.getItem(GIST_RAW_URL_TIME_KEY) || '0')
-        if (cachedUrl && (Date.now() - cachedTime < GIST_RAW_URL_MAX_AGE)) return cachedUrl
-      } catch { /* 缓存读取失败 */ }
-      // 直接使用硬编码的 raw URL（机器重启后也无需任何 API 调用）
-      // Gist 通过 PATCH 更新时 ID 不变，所以硬编码是安全的
-      localStorage.setItem(GIST_RAW_URL_CACHE_KEY, DEFAULT_GIST_RAW_URL)
-      localStorage.setItem(GIST_RAW_URL_TIME_KEY, Date.now().toString())
-      return DEFAULT_GIST_RAW_URL
-    }
-
-    /* 最后回退：通过 API 搜索教师的新 Gist（仅在硬编码 URL 失效时调用） */
-    async function _discoverGistByApi() {
-      try {
-        const resp = await fetch('https://api.github.com/users/' + TEACHER_GITHUB_USER + '/gists?per_page=10&t=' + Date.now())
-        if (!resp.ok) return null
-        const gists = await resp.json()
-        for (const g of gists) {
-          if (g.description === GIST_DESCRIPTION) {
-            // 找到了新 Gist，获取详情提取 raw URL
-            const detail = await fetch('https://api.github.com/gists/' + g.id + '?t=' + Date.now())
-            if (!detail.ok) continue
-            const gistData = await detail.json()
-            const file = gistData.files['student_data.json']
-            if (file && file.raw_url) {
-              // 缓存新的 raw URL
-              localStorage.setItem(GIST_RAW_URL_CACHE_KEY, file.raw_url)
-              localStorage.setItem(GIST_RAW_URL_TIME_KEY, Date.now().toString())
-              localStorage.setItem(GIST_ID_CACHE_KEY, g.id)
-              return file.raw_url
-            }
-          }
-        }
-      } catch (e) { console.warn('API 搜索 Gist 失败:', e.message) }
-      return null
-    }
-
-    /* 通道2：从 raw URL 获取学生数据（raw.githubusercontent.com 无 API 限制） */
-    async function fetchFromGistRaw(rawUrl) {
-      const resp = await fetch(rawUrl + '?t=' + Date.now())
-      if (!resp.ok) throw new Error('HTTP ' + resp.status)
-      return await resp.json()
-    }
 
     async function fetchCloudData(forceRefresh) {
       // 本地缓存检查（强制刷新时跳过）
@@ -463,37 +549,12 @@ const app = createApp({
         cloudLoading.value = true
         cloudError.value = ''
         let payload = null
-        let source = ''
-        // 通道1：优先尝试 gh-pages 静态文件（无 API 限制）
         try {
-          payload = await fetchFromPages()
-          source = 'gh-pages'
-        } catch (e1) {
-          // gh-pages 失败，尝试通道2：Gist raw URL（也无 API 限制）
-          try {
-            const rawUrl = await discoverGistRawUrl()
-            if (rawUrl) {
-              try {
-                payload = await fetchFromGistRaw(rawUrl)
-                source = 'gist-raw'
-              } catch (fetchErr) {
-                // 硬编码的 raw URL 失败（Gist 可能被删除重建），尝试 API 搜索新 Gist
-                console.warn('硬编码 raw URL 失效，尝试 API 搜索新 Gist:', fetchErr.message)
-                localStorage.removeItem(GIST_RAW_URL_CACHE_KEY)
-                localStorage.removeItem(GIST_RAW_URL_TIME_KEY)
-                const newUrl = await _discoverGistByApi()
-                if (newUrl) {
-                  payload = await fetchFromGistRaw(newUrl)
-                  source = 'gist-raw-discovered'
-                }
-              }
-            }
-          } catch (e2) {
-            console.warn('Gist raw 回退也失败:', e2.message)
-          }
-        }
+          const resp = await fetch(COS_DATA_URL + '?t=' + Date.now())
+          if (resp.ok) payload = await resp.json()
+        } catch (e) { console.warn('COS 获取失败:', e.message) }
         if (!payload) {
-          // 两个通道都失败，尝试使用本地缓存
+          // 获取失败，尝试使用本地缓存
           const cached = localStorage.getItem(CACHE_KEY)
           if (cached) {
             const p = JSON.parse(cached)
@@ -511,8 +572,7 @@ const app = createApp({
           localStorage.setItem('_cloud_att_session', JSON.stringify(payload.attSession))
         }
         _applyCloudPayload(payload)
-        if (source === 'gh-pages') console.log('[云端] 从 gh-pages 获取数据（无限制）')
-        else if (source === 'gist-raw') console.log('[云端] 从 Gist raw URL 获取数据（无限制）')
+        console.log('[云端] 从腾讯云 COS 获取数据')
         return payload
       } catch (e) {
         const cached = localStorage.getItem(CACHE_KEY)
@@ -680,7 +740,8 @@ const app = createApp({
 
     const submitModal = ref(null)
     const submitContent = ref('')
-    const pendingFiles = ref([]) // { name, type, size, data(base64) }
+    const pendingFiles = ref([]) // { name, type, size, cosKey, uploading }
+    const fileUploading = ref(false)
 
     function openSubmit(hw) {
       submitModal.value = hw
@@ -688,16 +749,36 @@ const app = createApp({
       pendingFiles.value = []
     }
 
-    function onFileSelect(e) {
+    async function onFileSelect(e) {
       const files = Array.from(e.target.files)
       for (const f of files) {
-        if (f.size > MAX_FILE_SIZE) { alert('文件 "' + f.name + '" 超过5MB限制，已跳过'); continue }
-        const reader = new FileReader()
-        reader.onload = (ev) => {
-          pendingFiles.value.push({ name: f.name, type: f.type, size: f.size, data: ev.target.result })
+        if (f.size > 5 * 1024 * 1024 * 1024) { alert('文件 "' + f.name + '" 超过5GB限制，已跳过'); continue }
+        const pf = { name: f.name, type: f.type, size: f.size, cosKey: '', uploading: true, progress: 0, progressText: '0%' }
+        pendingFiles.value.push(pf)
+        fileUploading.value = true
+        try {
+          let result
+          if (f.size > CHUNK_SIZE) {
+            // 大文件：分片上传
+            result = await cosMultipartUpload(f, 'homework_files/' + submitModal.value.id + '/' + user.value.studentId + '_' + Date.now() + '_' + f.name.replace(/[^a-zA-Z0-9._\u4e00-\u9fa5-]/g, '_'), (part, total) => {
+              pf.progress = Math.round(part / total * 100)
+              pf.progressText = pf.progress + '% (' + part + '/' + total + ')'
+            })
+          } else {
+            // 小文件：普通上传
+            result = await cosUploadFile(f, submitModal.value.id, user.value.studentId)
+          }
+          pf.cosKey = result.cosKey
+          pf.multipart = result.multipart || false
+          pf.uploading = false
+          pf.progressText = '✅'
+        } catch (err) {
+          pf.uploading = false
+          pf.uploadError = err.message
+          alert('文件 "' + f.name + '" 上传失败: ' + err.message)
         }
-        reader.readAsDataURL(f)
       }
+      fileUploading.value = pendingFiles.value.some(p => p.uploading)
       e.target.value = ''
     }
 
@@ -705,6 +786,7 @@ const app = createApp({
 
     function doSubmitHw() {
       if ((!submitContent.value.trim() && !pendingFiles.value.length) || !user.value) return
+      if (pendingFiles.value.some(p => p.uploading)) { alert('文件正在上传中，请稍候'); return }
       const subs = getSubmissions()
       const existing = subs.findIndex(s => s.studentId === user.value.studentId && s.homeworkId === submitModal.value.id)
       const newSub = {
@@ -713,7 +795,7 @@ const app = createApp({
         studentName: user.value.name,
         homeworkId: submitModal.value.id,
         content: submitContent.value,
-        attachments: pendingFiles.value.map(f => ({ name: f.name, type: f.type, size: f.size, data: f.data })),
+        attachments: pendingFiles.value.filter(p => p.cosKey).map(f => ({ name: f.name, type: f.type, size: f.size, cosKey: f.cosKey, multipart: f.multipart || false })),
         submittedAt: new Date().toISOString(),
         grade: existing >= 0 ? subs[existing].grade : null
       }
@@ -721,20 +803,48 @@ const app = createApp({
       try {
         localStorage.setItem('hw_submissions', JSON.stringify(subs))
       } catch (e) {
-        alert('存储空间不足，请减少附件大小或数量')
+        alert('存储空间不足')
         return
       }
+      // 同步提交到 COS（per-student file，避免50人并发冲突）
+      const _hwId = newSub.homeworkId, _stuId = newSub.studentId
+      ;(async () => {
+        try {
+          const enc = new TextEncoder()
+          const subJson = JSON.stringify(newSub)
+          const subKey = 'hw_submissions/' + _hwId + '/' + _stuId + '.json'
+          const bucket = COS_CFG.Bucket, region = COS_CFG.Region
+          const now = Math.floor(Date.now()/1000), exp = now+900, keyTime = now+';'+exp
+          const rawPath = '/' + subKey, encPath = '/' + _cosEncUrl(subKey), ct = 'application/json; charset=utf-8'
+          const skHex = await _hmacHex(COS_CFG.SecretKey, keyTime)
+          const hs = 'content-type=' + encodeURIComponent(ct)
+          const fs = 'put\n'+rawPath+'\n\n'+hs+'\n'
+          const fh = _hex(await _sha1Bytes(enc.encode(fs)))
+          const sts = 'sha1\n'+keyTime+'\n'+fh+'\n'
+          const sig = await _hmacHex(skHex, sts)
+          const auth = 'q-sign-algorithm=sha1&q-ak='+COS_CFG.SecretId+'&q-sign-time='+keyTime+'&q-key-time='+keyTime+'&q-header-list=content-type&q-url-param-list=&q-signature='+sig
+          const resp = await fetch('https://'+bucket+'.cos.'+region+'.myqcloud.com'+encPath, { method:'PUT', headers:{'Authorization':auth,'Content-Type':ct}, body:enc.encode(subJson) })
+          if (!resp.ok) throw new Error('上传失败 ('+resp.status+')')
+          console.log('[作业同步] 提交已同步到 COS: ' + subKey)
+        } catch (e) { console.warn('[作业同步] 上传失败:', e.message) }
+      })()
       submitModal.value = null
       pendingFiles.value = []
       alert('作业提交成功！')
     }
 
-    // 下载附件
+    // 下载附件（支持 COS 存储和旧的 base64 存储）
     function dlAtt(sub, ai) {
       const att = sub.attachments[ai]
       if (!att) return
       const a = document.createElement('a')
-      a.href = att.data
+      if (att.cosKey) {
+        // COS 存储的文件，直接通过 URL 下载
+        a.href = COS_CFG.Domain + '/' + _cosEncUrl(att.cosKey)
+      } else {
+        // 旧的 base64 存储方式（兼容）
+        a.href = att.data
+      }
       a.download = att.name
       a.click()
     }
@@ -781,6 +891,7 @@ const app = createApp({
     const attForm = reactive({ machineNo: '', hostUsage: '', mouseUsage: '', hygiene: '', remark: '' })
     const attSubmitted = ref(false)
     const attSubmitTime = ref('')
+    const attSubmitting = ref(false) // 防止重复提交
     const attSession = ref(null) // 当前考勤会话
     const hostOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
     const mouseOpts = [{ v: 'normal', l: '✅ 正常使用' }, { v: 'abnormal', l: '❌ 异常/损坏' }, { v: 'unused', l: '⚠️ 未使用' }]
@@ -886,9 +997,10 @@ const app = createApp({
       return rec ? rec.submitTimeStr : ''
     })
 
-    function submitAtt() {
+    async function submitAtt() {
       if (!attSessionActive.value) { alert('教师尚未开始上课，无法登记'); return }
       if (!attInRoster.value) { alert('你不在考勤花名册中，请联系教师'); return }
+      if (attSubmitting.value) { alert('正在提交中，请勿重复点击'); return }
       // 防重复提交：检查该学号在本次会话中是否已登记过
       const records = safeParse(localStorage.getItem('att_records'), [])
       const sessionStart = attSession.value.startedAt
@@ -902,12 +1014,29 @@ const app = createApp({
       if (!attForm.hostUsage) { alert('请选择主机使用情况'); return }
       if (!attForm.mouseUsage) { alert('请选择鼠标使用情况'); return }
       if (!attForm.hygiene) { alert('请选择卫生情况'); return }
-      const now = new Date()
-      const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), sessionId: attSession.value.startedAt, id: Date.now().toString() }
-      records.push(record)
-      localStorage.setItem('att_records', JSON.stringify(records))
-      attSubmitTime.value = now.toLocaleString('zh-CN')
-      attSubmitted.value = true
+      attSubmitting.value = true
+      try {
+        const now = new Date()
+        const record = { className: user.value.className, studentId: user.value.studentId, studentName: user.value.name, machineNo: attForm.machineNo, hostUsage: attForm.hostUsage, mouseUsage: attForm.mouseUsage, hygiene: attForm.hygiene, remark: attForm.remark, submitTime: now.toISOString(), submitTimeStr: now.toLocaleString('zh-CN'), sessionId: attSession.value.startedAt, id: Date.now().toString(), source: 'student_html' }
+        records.push(record)
+        localStorage.setItem('att_records', JSON.stringify(records))
+        // 同步到 COS，教师端可见（带重试机制）
+        const ok = await uploadAttRecord(record)
+        if (ok) {
+          alert('考勤登记成功！')
+        } else {
+          alert('考勤已本地保存！云端同步稍后自动完成，无需重新提交。')
+          // 后台定时重试（30秒后自动再试）
+          setTimeout(async () => {
+            console.log('[后台重试] 尝试重新上传:', record.studentId)
+            await uploadAttRecord(record)
+          }, 30000)
+        }
+        attSubmitTime.value = now.toLocaleString('zh-CN')
+        attSubmitted.value = true
+      } finally {
+        attSubmitting.value = false
+      }
     }
     function resetAtt() {
       Object.assign(attForm, { machineNo: '', hostUsage: '', mouseUsage: '', hygiene: '', remark: '' })
@@ -968,10 +1097,10 @@ const app = createApp({
     return {
       loginId, loginName, loginPwd, loginErr, user, tab, doLogin, doLogout, retryLoad, clearCache,
       cloudData, cloudLoading, cloudEncrypted, cloudError, localStudentCount,
-      homeworkList, getSub, submitModal, submitContent, pendingFiles, openSubmit, doSubmitHw,
+      homeworkList, getSub, submitModal, submitContent, pendingFiles, fileUploading, openSubmit, doSubmitHw,
       onFileSelect, removeFile, dlAtt,
       pwdInputs, pwdVerified, pwdVerify, pwdDelete, pwdResubmit,
-      attRoster, attForm, attSubmitted, attSubmitTime, attAlreadySubmitted, attExistingTime, hostOpts, mouseOpts, hygOpts, submitAtt, resetAtt,
+      attRoster, attForm, attSubmitted, attSubmitTime, attSubmitting, attAlreadySubmitted, attExistingTime, hostOpts, mouseOpts, hygOpts, submitAtt, resetAtt,
       attSession, attSessionActive, attInRoster, refreshSession,
       fmtDate, fmtSize, lvlText
     }
